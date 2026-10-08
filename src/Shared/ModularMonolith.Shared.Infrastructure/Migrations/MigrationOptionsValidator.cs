@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using ModularMonolith.Shared.Infrastructure.Configuration;
 using ModularMonolith.Shared.Infrastructure.Data;
@@ -6,7 +5,7 @@ using ModularMonolith.Shared.Infrastructure.Data;
 namespace ModularMonolith.Shared.Infrastructure.Migrations;
 
 /// <summary>Fails the migration run early on missing or unsafe settings.</summary>
-internal sealed class MigrationOptionsValidator(IConfiguration configuration, IOptions<DatabaseOptions> database) : IValidateOptions<MigrationOptions>
+internal sealed class MigrationOptionsValidator(IOptions<DatabaseOptions> database) : IValidateOptions<MigrationOptions>
 {
     public ValidateOptionsResult Validate(string? name, MigrationOptions options)
     {
@@ -15,7 +14,7 @@ internal sealed class MigrationOptionsValidator(IConfiguration configuration, IO
         {
             failures.Add("ConnectionStringName is required.");
         }
-        else if (string.IsNullOrWhiteSpace(configuration.GetConnectionString(options.ConnectionStringName)))
+        else if (string.IsNullOrWhiteSpace(options.ConnectionString))
         {
             failures.Add($"ConnectionStrings:{options.ConnectionStringName} (schema owner) is not configured.");
         }

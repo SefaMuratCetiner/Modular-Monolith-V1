@@ -12,7 +12,7 @@ namespace ModularMonolith.Catalog.Infrastructure.ExchangeRates;
 internal sealed class ExchangeRateProvider(
     IExchangeRatesApi api,
     ICacheStore cache,
-    IOptions<CatalogOptions> options)
+    IOptions<CatalogOptions> options) : IExchangeRateProvider
 {
     public async Task<ExchangeRate?> GetRateAsync(string fromCurrency, string toCurrency, CancellationToken cancellationToken)
     {

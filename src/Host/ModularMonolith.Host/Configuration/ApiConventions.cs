@@ -21,7 +21,7 @@ internal static class ApiConventions
         config.Versioning.PrependToRoute = true;
         config.Versioning.DefaultVersion = 1;
 
-        JsonDefaults.Apply(config.Serializer.Options);
+        JsonDefaults.ApplyHttp(config.Serializer.Options);
 
         config.Errors.ContentType = "application/problem+json";
         config.Errors.ProducesMetadataType = typeof(HttpValidationProblemDetails);

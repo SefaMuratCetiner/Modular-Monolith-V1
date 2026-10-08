@@ -46,6 +46,9 @@ internal static partial class Log
     [LoggerMessage(EventId = 1301, Level = LogLevel.Information, Message = "Database setup step {Step} completed")]
     public static partial void SetupStepCompleted(this ILogger logger, string step);
 
+    [LoggerMessage(EventId = 1310, Level = LogLevel.Warning, Message = "Slow database command ({DurationMs:F0} ms, trace {TraceId}): {Statement}")]
+    public static partial void SlowQuery(this ILogger logger, double durationMs, string statement, string traceId);
+
     [LoggerMessage(EventId = 1400, Level = LogLevel.Warning, Message = "After-commit callback failed")]
     public static partial void AfterCommitFailed(this ILogger logger, Exception exception);
 

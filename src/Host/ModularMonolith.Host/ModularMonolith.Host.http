@@ -38,12 +38,29 @@ Authorization: Bearer {{accessToken}}
 GET {{host}}/api/v1/catalog/products/{{productId}}
 Authorization: Bearer {{accessToken}}
 
-### Change the price (optimistic concurrency: send the version you read; a stale version returns 409)
+### Conditional GET: repeat with the ETag you received -> 304 Not Modified
+GET {{host}}/api/v1/catalog/products/{{productId}}
+Authorization: Bearer {{accessToken}}
+If-None-Match: "1-0000000000000000"
+
+### Change the price with If-Match (preferred). A stale ETag returns 412, no precondition returns 428.
+PUT {{host}}/api/v1/catalog/products/{{productId}}/price
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+If-Match: "1-0000000000000000"
+
+{ "price": 24.99, "currency": "USD" }
+
+### ...or with the version in the body (a stale version returns 409)
 PUT {{host}}/api/v1/catalog/products/{{productId}}/price
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
-{ "price": 24.99, "currency": "USD", "version": 1 }
+{ "price": 26.99, "currency": "USD", "version": 2 }
+
+### Price in another currency (output-cached per tenant for Modules:Catalog:PriceOutputCacheSeconds)
+GET {{host}}/api/v1/catalog/products/{{productId}}/price?currency=EUR
+Authorization: Bearer {{accessToken}}
 
 ### Operators (alice has the operator role): inspect and replay dead-lettered outbox messages
 GET {{host}}/api/v1/ops/outbox/catalog/dead-letters?page=1&pageSize=20

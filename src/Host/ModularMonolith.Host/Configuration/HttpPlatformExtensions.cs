@@ -4,10 +4,12 @@ using System.Net;
 using Microsoft.AspNetCore.Http.Timeouts;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.HttpsPolicy;
+using Microsoft.AspNetCore.OutputCaching.StackExchangeRedis;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.Options;
 using ModularMonolith.ServiceDefaults;
+using ModularMonolith.Shared.Infrastructure.Caching;
 using ModularMonolith.Shared.Infrastructure.Configuration;
 using ModularMonolith.Shared.Infrastructure.Serialization;
 using ModularMonolith.Shared.Infrastructure.Web;
@@ -76,7 +78,7 @@ internal static class HttpPlatformExtensions
     private static void AddResponseConventions(IServiceCollection services)
     {
         // One JSON convention (also used by FastEndpoints, see ApiConventions).
-        services.ConfigureHttpJsonOptions(options => JsonDefaults.Apply(options.SerializerOptions));
+        services.ConfigureHttpJsonOptions(options => JsonDefaults.ApplyHttp(options.SerializerOptions));
 
         // Every error body is RFC 9457 problem details with a traceId.
         services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
@@ -106,12 +108,24 @@ internal static class HttpPlatformExtensions
         });
         services.Configure<BrotliCompressionProviderOptions>(options => options.Level = CompressionLevel.Fastest);
         services.Configure<GzipCompressionProviderOptions>(options => options.Level = CompressionLevel.Fastest);
+
+        // Output cache backed by Valkey (shared by all replicas, evictable by tag). Policies are
+        // registered by the modules; ASP.NET Core's default policy is not used.
+        services.AddOutputCache();
+        services.AddStackExchangeRedisOutputCache(_ => { });
+        services.AddOptions<RedisOutputCacheOptions>()
+            .Configure<ValkeyConnection, IHostEnvironment>((outputCache, valkey, environment) =>
+            {
+                outputCache.ConnectionMultiplexerFactory = () => Task.FromResult(valkey.Multiplexer);
+                outputCache.InstanceName = $"{CacheKeyFactory.Prefix}:{environment.EnvironmentName.ToLowerInvariant()}:output:";
+            });
     }
 
     /// <summary>The outer middleware: must run before logging, authentication and endpoints.</summary>
     public static WebApplication UseHttpPlatform(this WebApplication app)
     {
         app.UseForwardedHeaders();
+        app.UseMiddleware<TraceResponseHeadersMiddleware>();
         app.UseExceptionHandler();
         app.UseStatusCodePages();                   // empty 4xx/5xx (404, 405, 413, …) become problem details
 

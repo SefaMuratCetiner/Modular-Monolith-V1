@@ -10,7 +10,7 @@ namespace ModularMonolith.Catalog.Features.SyncSeller;
 /// so Catalog never queries Identity's tables. Runs in the event's tenant, inside an
 /// inbox-protected transaction, so redelivery is harmless.
 /// </summary>
-internal sealed class UserRegisteredHandler(IDbSession session) : IIntegrationEventHandler<UserRegisteredIntegrationEvent>
+internal sealed class UserRegisteredIntegrationEventHandler(IDbSession session) : IIntegrationEventHandler<UserRegisteredIntegrationEvent>
 {
     public async Task HandleAsync(UserRegisteredIntegrationEvent integrationEvent, CancellationToken cancellationToken)
     {

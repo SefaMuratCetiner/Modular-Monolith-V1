@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 
@@ -10,7 +9,7 @@ namespace ModularMonolith.Shared.Infrastructure.Caching;
 /// With <c>AbortOnConnectFail=false</c> startup continues while Valkey is down and the client
 /// reconnects in the background (the cache and idempotency store degrade meanwhile).
 /// </summary>
-public sealed class ValkeyConnection(IConfiguration configuration, IOptions<CacheOptions> options) : IAsyncDisposable
+public sealed class ValkeyConnection(IOptions<CacheOptions> options) : IAsyncDisposable
 {
     private readonly SemaphoreSlim _connectLock = new(1, 1);
     private ConnectionMultiplexer? _multiplexer;
@@ -38,9 +37,8 @@ public sealed class ValkeyConnection(IConfiguration configuration, IOptions<Cach
                 return;
             }
 
-            var name = options.Value.ConnectionStringName;
-            var connectionString = configuration.GetConnectionString(name)
-                ?? throw new InvalidOperationException($"Connection string '{name}' is not configured.");
+            var connectionString = options.Value.ConnectionString
+                ?? throw new InvalidOperationException($"Connection string '{options.Value.ConnectionStringName}' is not configured.");
             var settings = ConfigurationOptions.Parse(connectionString);
             settings.AbortOnConnectFail = false;
             _multiplexer = await ConnectionMultiplexer.ConnectAsync(settings);

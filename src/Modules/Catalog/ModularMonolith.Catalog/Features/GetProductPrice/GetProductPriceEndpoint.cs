@@ -1,7 +1,9 @@
 using FastEndpoints;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using ModularMonolith.Catalog.Domain;
+using ModularMonolith.Catalog.Infrastructure;
 using ModularMonolith.Shared.Infrastructure.Web;
 using ModularMonolith.Shared.Kernel.Cqrs;
 
@@ -15,7 +17,11 @@ internal sealed class GetProductPriceEndpoint(IQueryHandler<GetProductPriceQuery
     {
         Get("catalog/products/{id:guid}/price");
         Version(1);
-        Options(builder => builder.WithTags("Catalog").RequireRateLimiting(RateLimitPolicies.PerUser));
+        // Output cache (Valkey): identical for all users of a tenant, evicted when a price changes.
+        Options(builder => builder
+            .WithTags("Catalog")
+            .RequireRateLimiting(RateLimitPolicies.PerUser)
+            .CacheOutput(CatalogOutputCache.PricePolicy));
         Description(
             builder => builder
                 .Produces<ProductPrice>(StatusCodes.Status200OK)

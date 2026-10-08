@@ -16,6 +16,13 @@ public sealed class MigrationOptions
     public string ConnectionStringName { get; set; } = "postgres-migrations";
 
     /// <summary>
+    /// Gets or sets the connection string. Resolved once at startup from
+    /// <c>ConnectionStrings:{ConnectionStringName}</c> when not set explicitly, so no component has to
+    /// read <c>IConfiguration</c> at runtime.
+    /// </summary>
+    public string? ConnectionString { get; set; }
+
+    /// <summary>
     /// Gets or sets the login the application connects with (e.g. <c>modular_monolith_api</c>).
     /// When set, the migrator grants it membership of <c>Database:ApplicationRole</c>.
     /// </summary>

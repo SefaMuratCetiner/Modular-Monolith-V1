@@ -7,7 +7,10 @@ using ModularMonolith.Shared.Kernel.Cqrs;
 
 namespace ModularMonolith.Catalog.Features.GetProduct;
 
-/// <summary><c>GET /api/v1/catalog/products/{id}</c>: the resource returned in the <c>Location</c> of CreateProduct.</summary>
+/// <summary>
+/// <c>GET /api/v1/catalog/products/{id}</c>: the resource returned in the <c>Location</c> of CreateProduct.
+/// Returns an <c>ETag</c>; send it back in <c>If-None-Match</c> (304) or in <c>If-Match</c> when changing the product.
+/// </summary>
 internal sealed class GetProductEndpoint(IQueryHandler<GetProductQuery, ProductDetails> handler)
     : Endpoint<GetProductRequest, ProductDetails>
 {
@@ -22,6 +25,7 @@ internal sealed class GetProductEndpoint(IQueryHandler<GetProductQuery, ProductD
         Description(
             builder => builder
                 .Produces<ProductDetails>(StatusCodes.Status200OK)
+                .Produces(StatusCodes.Status304NotModified)
                 .ProducesProblems(StatusCodes.Status403Forbidden, StatusCodes.Status404NotFound),
             clearDefaults: true);
         Summary(summary => summary.Summary = "Gets a product of the caller's tenant.");
@@ -33,6 +37,16 @@ internal sealed class GetProductEndpoint(IQueryHandler<GetProductQuery, ProductD
         if (result.IsFailure)
         {
             await Send.ResultAsync(result.Error.ToProblem());
+            return;
+        }
+
+        // ETag + If-None-Match: unchanged representations cost a 304 without a body.
+        var etag = EntityTags.For(result.Value.Version, result.Value);
+        HttpContext.Response.Headers.ETag = etag.ToString();
+        HttpContext.Response.Headers.CacheControl = "private, no-cache";
+        if (EntityTags.IsNotModified(HttpContext.Request, etag))
+        {
+            await Send.NotModifiedAsync(ct);
             return;
         }
 

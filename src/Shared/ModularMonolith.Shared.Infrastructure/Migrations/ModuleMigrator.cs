@@ -1,7 +1,6 @@
 using System.Reflection;
 using Dapper;
 using DbUp;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ModularMonolith.Shared.Infrastructure.Data;
@@ -25,7 +24,6 @@ namespace ModularMonolith.Shared.Infrastructure.Migrations;
 /// </summary>
 public sealed class ModuleMigrator(
     ModuleCatalog catalog,
-    IConfiguration configuration,
     IOptions<DatabaseOptions> database,
     IOptions<MigrationOptions> migration,
     IEnumerable<IDatabaseSetupStep> setupSteps,
@@ -43,7 +41,7 @@ public sealed class ModuleMigrator(
     public async Task MigrateAsync(CancellationToken cancellationToken)
     {
         var settings = migration.Value;
-        var connectionString = configuration.GetConnectionString(settings.ConnectionStringName)
+        var connectionString = settings.ConnectionString
             ?? throw new InvalidOperationException($"Connection string '{settings.ConnectionStringName}' is not configured.");
         var role = SqlIdentifier.Quote(database.Value.ApplicationRole);
 

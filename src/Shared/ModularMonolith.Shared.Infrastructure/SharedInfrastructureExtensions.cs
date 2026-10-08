@@ -17,6 +17,7 @@ using ModularMonolith.Shared.Infrastructure.Localization;
 using ModularMonolith.Shared.Infrastructure.Messaging;
 using ModularMonolith.Shared.Infrastructure.Migrations;
 using ModularMonolith.Shared.Infrastructure.Modules;
+using ModularMonolith.Shared.Infrastructure.Observability;
 using ModularMonolith.Shared.Infrastructure.Security;
 using ModularMonolith.Shared.Infrastructure.Tenancy;
 using ModularMonolith.Shared.Infrastructure.Web;
@@ -50,14 +51,16 @@ public static class SharedInfrastructureExtensions
         services.AddHttpContextAccessor();
 
         // Strongly typed, validated configuration: the host refuses to start on invalid settings.
-        services.AddValidatedOptions<DatabaseOptions, DatabaseOptionsValidator>(configuration, DatabaseOptions.SectionName);
-        services.AddValidatedOptions<CacheOptions, CacheOptionsValidator>(configuration, CacheOptions.SectionName);
+        services.AddValidatedOptions<DatabaseOptions, DatabaseOptionsValidator>(configuration, DatabaseOptions.SectionName)
+            .PostConfigure(options => options.ConnectionString ??= configuration.GetConnectionString(options.ConnectionStringName));
+        services.AddValidatedOptions<CacheOptions, CacheOptionsValidator>(configuration, CacheOptions.SectionName)
+            .PostConfigure(options => options.ConnectionString ??= configuration.GetConnectionString(options.ConnectionStringName));
         services.AddValidatedOptions<TenancyOptions, TenancyOptionsValidator>(configuration, TenancyOptions.SectionName);
         services.AddValidatedOptions<OutboxOptions, OutboxOptionsValidator>(configuration, OutboxOptions.SectionName);
         services.AddValidatedOptions<RetentionOptions, RetentionOptionsValidator>(configuration, RetentionOptions.SectionName);
         services.AddValidatedOptions<Localization.LocalizationOptions, LocalizationOptionsValidator>(configuration, Localization.LocalizationOptions.SectionName);
 
-        AddData(services, configuration);
+        AddData(services);
         AddMessaging(services);
         AddCaching(services);
 
@@ -170,22 +173,24 @@ public static class SharedInfrastructureExtensions
         ArgumentNullException.ThrowIfNull(configuration);
         services.AddSingleton(new ModuleCatalog(modules));
         services.AddOptions<DatabaseOptions>().Bind(configuration.GetSection(DatabaseOptions.SectionName));
-        services.AddValidatedOptions<MigrationOptions, MigrationOptionsValidator>(configuration, MigrationOptions.SectionName);
+        services.AddValidatedOptions<MigrationOptions, MigrationOptionsValidator>(configuration, MigrationOptions.SectionName)
+            .PostConfigure(options => options.ConnectionString ??= configuration.GetConnectionString(options.ConnectionStringName));
         services.AddSingleton<ModuleMigrator>();
         return services;
     }
 
-    private static void AddData(IServiceCollection services, IConfiguration configuration)
+    private static void AddData(IServiceCollection services)
     {
         DapperTypeHandlers.Register();
         services.AddSingleton(provider =>
         {
-            var name = provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.ConnectionStringName;
-            var connectionString = configuration.GetConnectionString(name)
-                ?? throw new InvalidOperationException($"Connection string '{name}' is not configured.");
+            var settings = provider.GetRequiredService<IOptions<DatabaseOptions>>().Value;
+            var connectionString = settings.ConnectionString
+                ?? throw new InvalidOperationException($"Connection string '{settings.ConnectionStringName}' is not configured.");
             return new NpgsqlDataSourceBuilder(connectionString).Build();
         });
         services.AddScoped<DbSession>();
+        services.AddHostedService<SlowQueryLogger>();
         services.AddScoped<IDbSession>(provider => provider.GetRequiredService<DbSession>());
         services.AddScoped<IUnitOfWork>(provider => provider.GetRequiredService<DbSession>());
     }

@@ -12,7 +12,7 @@ namespace ModularMonolith.Catalog.Features.GetProductPrice;
 /// </summary>
 internal sealed class GetProductPriceQueryHandler(
     IDbSession session,
-    ExchangeRateProvider exchangeRates) : IQueryHandler<GetProductPriceQuery, ProductPrice>
+    IExchangeRateProvider exchangeRates) : IQueryHandler<GetProductPriceQuery, ProductPrice>
 {
     public async Task<Result<ProductPrice>> HandleAsync(GetProductPriceQuery query, CancellationToken cancellationToken)
     {

@@ -60,6 +60,7 @@ app.UseTenantResolution();                  // after authentication: tenant come
 app.UseRequestTimeouts();
 app.UseRateLimiter();                       // after tenancy: partitions by tenant + user
 app.UseAuthorization();
+app.UseOutputCache();                       // after authorization: only authorized requests reach the cache
 app.UseFastEndpoints(ApiConventions.Apply); // /api/v{n}/..., shared JSON, problem-details validation errors
 if (app.Environment.IsDevelopment())
 {

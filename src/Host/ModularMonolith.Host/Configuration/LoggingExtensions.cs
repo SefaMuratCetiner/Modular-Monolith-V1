@@ -7,7 +7,7 @@ namespace ModularMonolith.Host.Configuration;
 /// <summary>
 /// Serilog is the single logging pipeline. Sinks are chosen by configuration:
 /// <list type="bullet">
-/// <item>Console: always.</item>
+/// <item>Console: always, through an asynchronous buffer.</item>
 /// <item>Loki: when <c>Observability:LokiUrl</c> is set (compose and Aspire).</item>
 /// <item>OTLP: when <c>Observability:OtlpLogs</c> is true and an OTLP endpoint exists (Aspire dashboard).
 /// Never sent to Tempo, which does not accept logs.</item>
@@ -28,7 +28,12 @@ internal static class LoggingExtensions
                 .ReadFrom.Services(services)
                 .Enrich.FromLogContext()
                 .Enrich.WithProperty("service_name", serviceName)
-                .WriteTo.Console(formatProvider: CultureInfo.InvariantCulture);
+                // Console writes happen on a background thread; request threads never block on stdout.
+                // When the buffer is full, events are dropped rather than slowing requests down.
+                .WriteTo.Async(
+                    sink => sink.Console(formatProvider: CultureInfo.InvariantCulture),
+                    bufferSize: 10_000,
+                    blockWhenFull: false);
 
             var lokiUrl = configuration["Observability:LokiUrl"];
             if (!string.IsNullOrWhiteSpace(lokiUrl))

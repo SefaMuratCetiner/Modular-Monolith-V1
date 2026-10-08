@@ -18,6 +18,18 @@ public static class JsonDefaults
     /// <summary>Gets the shared, read-only serializer options.</summary>
     public static JsonSerializerOptions Options { get; } = CreateOptions();
 
+    /// <summary>
+    /// Applies the conventions plus strict request parsing for HTTP: a request body containing a property
+    /// the endpoint does not declare is rejected with 400 (no silent over-posting or typos). Internal
+    /// payloads (outbox, cache) stay tolerant so older and newer versions can read each other.
+    /// </summary>
+    /// <param name="options">The HTTP serializer options (FastEndpoints and minimal APIs).</param>
+    public static void ApplyHttp(JsonSerializerOptions options)
+    {
+        Apply(options);
+        options.UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow;
+    }
+
     /// <summary>Applies the application conventions to an existing options instance.</summary>
     /// <param name="options">The options to configure (e.g. FastEndpoints' or ASP.NET Core's).</param>
     public static void Apply(JsonSerializerOptions options)

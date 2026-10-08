@@ -1,6 +1,8 @@
 using Hangfire;
 using Hangfire.PostgreSql;
+using Microsoft.Extensions.Options;
 using ModularMonolith.Host.Migrations;
+using ModularMonolith.Shared.Infrastructure.Data;
 
 namespace ModularMonolith.Host.Configuration;
 
@@ -12,15 +14,13 @@ internal static class BackgroundJobExtensions
 {
     public static WebApplicationBuilder AddBackgroundJobs(this WebApplicationBuilder builder)
     {
-        var connectionString = builder.Configuration.GetConnectionString("postgres")
-            ?? throw new InvalidOperationException("Connection string 'postgres' is not configured.");
-
-        builder.Services.AddHangfire(configuration => configuration
+        // Same validated connection (least-privileged application login) as the rest of the application.
+        builder.Services.AddHangfire((provider, configuration) => configuration
             .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
             .UseSimpleAssemblyNameTypeSerializer()
             .UseRecommendedSerializerSettings()
             .UsePostgreSqlStorage(
-                options => options.UseNpgsqlConnection(connectionString),
+                options => options.UseNpgsqlConnection(provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.ConnectionString),
                 new PostgreSqlStorageOptions
                 {
                     SchemaName = HangfireSchemaStep.Schema,

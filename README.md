@@ -149,7 +149,8 @@ ModularMonolithV1/
     ├── Host/ModularMonolith.Host/
     │   ├── Program.cs                          # composition root (module list lives here)
     │   ├── Configuration/                      # HttpPlatform, Security, Logging, BackgroundJobs, ApiConventions,
-    │   │                                       # SecurityHeadersMiddleware, GracefulShutdown, KeyRing (Data Protection),
+    │   │                                       # SecurityHeadersMiddleware, TraceResponseHeadersMiddleware, GracefulShutdown,
+    │   │                                       # KeyRing (Data Protection),
     │   │                                       # *Options + *OptionsValidator
     │   ├── Operations/                         # operator endpoints: outbox dead-letter list and replay
     │   ├── Migrations/                         # `migrate` command, Hangfire schema step
@@ -181,29 +182,31 @@ ModularMonolithV1/
     │       ├── Idempotency/    FastEndpoints pre/post processors, IdempotencyPolicy, Valkey store
     │       ├── Localization/   JSON IStringLocalizer per module assembly
     │       ├── Health/         PostgreSQL, Valkey checks
-    │       ├── Observability/  ActivitySource/Meter, source-generated log messages
-    │       └── Web/            Result -> ProblemDetails, ProblemResponses, PagingRequest, OpenAPI helpers
+    │       ├── Observability/  ActivitySource/Meter, source-generated log messages, SlowQueryLogger
+    │       └── Web/            Result -> ProblemDetails, ProblemResponses, PagingRequest, OpenAPI helpers,
+    │                           EntityTags (ETag / If-Match), TenantOutputCachePolicy
     └── Modules/
         ├── Catalog/
         │   ├── ModularMonolith.Catalog.Contracts/   ProductCreatedIntegrationEvent
         │   └── ModularMonolith.Catalog/
         │       ├── CatalogModule.cs                 # the only public type
-        │       ├── CatalogOptions.cs  CatalogFeatures.cs
+        │       ├── CatalogOptions.cs  CatalogFeatures.cs  CatalogTelemetry.cs (business metrics)
         │       ├── Domain/          Product, ProductId, Sku, Money, SellerId, domain events, CatalogErrors
         │       ├── Features/
-        │       │   ├── CreateProduct/   Endpoint, Command, Handler, Validator, PublishProductCreated
+        │       │   ├── CreateProduct/   Endpoint, Command, Handler, Validator, ProductCreatedDomainEventHandler
         │       │   ├── GetProduct/      Endpoint, Query (+ read model incl. version), Handler (target of 201 Location)
         │       │   ├── ChangeProductPrice/ Endpoint, Command, Handler, Validator (optimistic concurrency)
         │       │   ├── ListProducts/    Endpoint, Query (+ read model), Handler (paged, cached per page)
         │       │   ├── GetProductPrice/ Endpoint, Query, Handler (currency conversion)
-        │       │   └── SyncSeller/      UserRegisteredHandler (consumes Identity's event)
-        │       ├── Infrastructure/  ProductRepository, CatalogCache (regions), ExchangeRates/ (Refit + ACL),
+        │       │   └── SyncSeller/      UserRegisteredIntegrationEventHandler (consumes Identity's event)
+        │       ├── Infrastructure/  ProductRepository, CatalogCache (regions), CatalogOutputCache,
+        │       │                    ExchangeRates/ (IExchangeRateProvider, Refit + ACL),
         │       │                    Migrations/001_catalog.sql, 002_catalog_v2.sql, 003_catalog_grants.sql
         │       └── Resources/Catalog.en.json
         └── Identity/
             ├── ModularMonolith.Identity.Contracts/  UserRegisteredIntegrationEvent
             └── ModularMonolith.Identity/
-                ├── IdentityModule.cs  IdentityOptions.cs  IdentityFeatures.cs
+                ├── IdentityModule.cs  IdentityOptions.cs  IdentityFeatures.cs  IdentityTelemetry.cs
                 ├── Domain/          UserProfile, UserProfileId, Email, SubjectId, UserRegisteredDomainEvent, IdentityErrors
                 ├── Features/        RegisterUser/, GetCurrentUser/, ListUsers/
                 ├── Infrastructure/  UserProfileRepository, Keycloak/ (Refit + health check), Migrations/001-003
@@ -330,8 +333,8 @@ internal sealed record CreateProductResponse(Guid Id);
 ### 3. Domain event to integration event, through the outbox, in one transaction
 
 ```csharp
-// Features/CreateProduct/PublishProductCreated.cs
-internal sealed class PublishProductCreated(IOutbox outbox, ITenantContext tenant, IUnitOfWork uow, ICacheStore cache)
+// Features/CreateProduct/ProductCreatedDomainEventHandler.cs
+internal sealed class ProductCreatedDomainEventHandler(IOutbox outbox, ITenantContext tenant, IUnitOfWork uow, ICacheStore cache)
     : IDomainEventHandler<ProductCreatedDomainEvent>
 {
     public async Task HandleAsync(ProductCreatedDomainEvent e, CancellationToken ct)
@@ -342,7 +345,11 @@ internal sealed class PublishProductCreated(IOutbox outbox, ITenantContext tenan
             e.EventId, e.OccurredAt, tenant.TenantId, e.ProductId, e.Name, e.Sku, e.Price, e.Currency, e.SellerId), ct);
 
         // Side effects that must only happen after a successful commit.
-        uow.OnCommitted(token => cache.RemoveAsync(ListProductsQueryHandler.CacheKey, token));
+        uow.OnCommitted(async token =>
+        {
+            await cache.InvalidateAsync(CatalogCache.ProductList, token);              // every cached page
+            CatalogTelemetry.ProductsCreated.Add(1, new("currency", e.Currency));       // business metric
+        });
     }
 }
 ```
@@ -350,9 +357,9 @@ internal sealed class PublishProductCreated(IOutbox outbox, ITenantContext tenan
 ### 4. Cross-module consumer: Catalog reacts to Identity
 
 ```csharp
-// Features/SyncSeller/UserRegisteredHandler.cs
+// Features/SyncSeller/UserRegisteredIntegrationEventHandler.cs
 // Catalog references ONLY ModularMonolith.Identity.Contracts, never Identity internals or tables.
-internal sealed class UserRegisteredHandler(IDbSession session) : IIntegrationEventHandler<UserRegisteredIntegrationEvent>
+internal sealed class UserRegisteredIntegrationEventHandler(IDbSession session) : IIntegrationEventHandler<UserRegisteredIntegrationEvent>
 {
     public async Task HandleAsync(UserRegisteredIntegrationEvent e, CancellationToken ct)
     {
@@ -473,7 +480,10 @@ create policy tenant_isolation on catalog.products
   - `modmono.outbox.failed`
   - `modmono.outbox.dead_lettered`
   - `modmono.outbox.pending`, `modmono.outbox.dead`, `modmono.outbox.oldest_pending_age` (backlog and consumer lag, sampled every `Outbox:MetricsIntervalSeconds`)
-- **Logs** go through Serilog to the console and to Loki (`Observability:LokiUrl`). They also go to OTLP when `Observability:OtlpLogs=true`. Trace and span ids are included.
+  - `modmono.db.slow_queries`
+- **Business metrics** (recorded only after commit, bounded tags): `modmono.catalog.products.created` (by currency), `modmono.catalog.products.price_changes`, `modmono.identity.users.registered`. Each module owns its meter (`ModularMonolith.Catalog`, `ModularMonolith.Identity`).
+- **Slow queries.** Every database command slower than `Database:SlowQueryThresholdMs` (default 500 ms) is logged as a warning with its SQL text (placeholders only, never parameter values), duration and trace id. It hooks Npgsql's activities, so Dapper, the outbox and Hangfire are all covered.
+- **Logs** go through Serilog to the console (asynchronous, bounded buffer that drops instead of blocking requests) and to Loki (`Observability:LokiUrl`). They also go to OTLP when `Observability:OtlpLogs=true`. Trace and span ids are included.
 - **Grafana** datasources are provisioned with fixed UIDs and these links: Tempo → Loki, Loki → Tempo, Prometheus exemplars → Tempo. A starter dashboard is included.
 
 ## Security
@@ -504,19 +514,23 @@ create policy tenant_isolation on catalog.products
 | Status codes | 200, 201 (+ `Location` of the new resource), 400, 401, 403, 404, 409, 413, 422 (idempotency key reuse), 429 (+ `Retry-After`), 503 (feature disabled / dependency down), 504 (timeout) |
 | Lists | Always paged: `?page=1&pageSize=20` (max 100), response `{ items, page, pageSize, totalCount, totalPages, hasNextPage, hasPreviousPage }`, deterministic ordering |
 | Limits | Request timeout `Http:RequestTimeoutSeconds` (504), body size `Http:MaxRequestBodyBytes` (413), rate limit per tenant + user (429) |
-| Idempotency | Optional `Idempotency-Key` header on POST |
+| Idempotency | `Idempotency-Key` header on POST, per-endpoint `IdempotencyPolicy` |
+| Strict input | Request bodies with properties the endpoint does not declare are rejected with 400 (no over-posting, typos surface immediately) |
+| ETags and conditional requests | `GET /catalog/products/{id}` returns a strong `ETag` (`"{version}-{fingerprint}"`) and `Cache-Control: private, no-cache`; `If-None-Match` returns 304. `PUT .../price` accepts `If-Match` (stale: 412) or a body `version` (stale: 409); neither: 428 |
+| Output caching | `GET /catalog/products/{id}/price` is cached server-side in Valkey per tenant and query string (`TenantOutputCachePolicy`), evicted by tag when a price changes; only 200 responses are stored |
+| Tracing | Every response carries `traceresponse` (W3C) and `X-Trace-Id`; problem details carry `traceId` |
 | OpenAPI | Every endpoint documents its success and problem responses; the contract is served in Development at `/swagger/v1/swagger.json` (Swagger UI is never exposed outside Development) |
 | Transport | Outside Development: HTTPS redirection (308) and HSTS, except `/health/*` and `/metrics`; `X-Forwarded-*` honoured only from `ReverseProxy:KnownProxies` / `KnownNetworks`; secure-only cookies |
 | Headers | `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `Cross-Origin-Opener-Policy`, and a CSP (locked down for JSON, relaxed only for the Hangfire and Swagger UIs); no `Server` header; Brotli/gzip compression |
 
 ## Configuration
 
-Every section is a strongly typed options class with an `IValidateOptions<T>` validator and `ValidateOnStart()`, so the host refuses to start on missing or invalid settings and lists every problem.
+Every section is a strongly typed options class with an `IValidateOptions<T>` validator and `ValidateOnStart()`, so the host refuses to start on missing or invalid settings and lists every problem. Connection strings are resolved into the options once at registration (`ConnectionStrings:{ConnectionStringName}`), so no component reads `IConfiguration` at runtime.
 
 | Section | Validated rules |
 |---|---|
 | `ConnectionStrings:postgres`, `ConnectionStrings:cache` | Must be present (names configurable in `Database` / `Cache`) |
-| `Database` | Connection string name set; `ApplicationRole` is a lowercase SQL identifier; `TransientRetries` 0-5 |
+| `Database` | Connection string present; `ApplicationRole` is a lowercase SQL identifier; `TransientRetries` 0-5; `SlowQueryThresholdMs` 0-60000 |
 | `Authentication` | `Authority` is an absolute URL, https unless `RequireHttpsMetadata=false` (development only); audience and web client id set |
 | `Tenancy` | Claim type set; valid default tenant when the fallback is enabled; `RootDomain` is a host name |
 | `Outbox` | Batch size, batches per run, attempts, delays, lease and metrics interval within range; cron has 5 or 6 fields |
@@ -527,7 +541,7 @@ Every section is a strongly typed options class with an `IValidateOptions<T>` va
 | `Migrations` (migrate command only) | Owner connection string present; application role and login are SQL identifiers; a login password requires a login |
 | `DataProtection` | Application name set; a certificate file is required when `RequireEncryptionAtRest` (default outside Development) |
 | `ReverseProxy` | Proxies are IP addresses, networks are CIDR ranges, forward limit 1–10 |
-| `Modules:Catalog`, `Modules:Identity` | Cache TTLs within range; URLs are absolute http(s) |
+| `Modules:Catalog`, `Modules:Identity` | Cache and output-cache TTLs within range; URLs are absolute http(s) |
 
 Behind a TLS-terminating load balancer or ingress, set `ReverseProxy__KnownNetworks__0=<ingress CIDR>` so the client IP (rate limiting, audit) and the https scheme are taken from `X-Forwarded-*`.
 
@@ -580,7 +594,7 @@ Compose also defines CPU and memory limits for every service and a readiness hea
 ### … a slice to an existing module
 
 1. Create `Features/<UseCase>/`.
-2. Add a `…Command : ICommand<T>` or `…Query : IQuery<T>` (use the module's typed ids, e.g. `ProductId`, inside the module and `Guid` only at the HTTP boundary), a handler, an optional `AbstractValidator<…>`, and a FastEndpoints endpoint with slice-local request and response records. List queries take a `PageRequest` and return `PagedResult<T>`; endpoints document their responses with `Description(... .ProducesProblems(...), clearDefaults: true)`.
+2. Add a `…Command : ICommand<T>` or `…Query : IQuery<T>` (use the module's typed ids, e.g. `ProductId`, inside the module and `Guid` only at the HTTP boundary). Name event handlers `{Event}DomainEventHandler` or `{Event}IntegrationEventHandler`; put external dependencies behind an interface (e.g. `IExchangeRateProvider`), a handler, an optional `AbstractValidator<…>`, and a FastEndpoints endpoint with slice-local request and response records. List queries take a `PageRequest` and return `PagedResult<T>`; endpoints document their responses with `Description(... .ProducesProblems(...), clearDefaults: true)`.
 3. That's all. Handlers and validators are picked up by assembly scanning and wrapped by the decorator chain automatically.
 
 ### … a module

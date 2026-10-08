@@ -1,11 +1,10 @@
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using ModularMonolith.Shared.Infrastructure.Configuration;
 
 namespace ModularMonolith.Shared.Infrastructure.Caching;
 
 /// <summary>Fails startup when the Valkey connection string is missing.</summary>
-internal sealed class CacheOptionsValidator(IConfiguration configuration) : IValidateOptions<CacheOptions>
+internal sealed class CacheOptionsValidator : IValidateOptions<CacheOptions>
 {
     public ValidateOptionsResult Validate(string? name, CacheOptions options)
     {
@@ -14,7 +13,7 @@ internal sealed class CacheOptionsValidator(IConfiguration configuration) : IVal
         {
             failures.Add("ConnectionStringName is required.");
         }
-        else if (string.IsNullOrWhiteSpace(configuration.GetConnectionString(options.ConnectionStringName)))
+        else if (string.IsNullOrWhiteSpace(options.ConnectionString))
         {
             failures.Add($"ConnectionStrings:{options.ConnectionStringName} is not configured.");
         }

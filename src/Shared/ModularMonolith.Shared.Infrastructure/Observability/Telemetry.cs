@@ -30,6 +30,10 @@ public static class Telemetry
     public static Counter<long> OutboxFailed { get; } =
         Meter.CreateCounter<long>("modmono.outbox.failed", description: "Outbox dispatch attempts that failed and will be retried.");
 
+    /// <summary>Gets the counter of database commands slower than the configured threshold.</summary>
+    public static Counter<long> SlowQueries { get; } =
+        Meter.CreateCounter<long>("modmono.db.slow_queries", description: "Database commands slower than Database:SlowQueryThresholdMs.");
+
     /// <summary>Gets the counter of dead-lettered outbox messages.</summary>
     public static Counter<long> OutboxDeadLettered { get; } =
         Meter.CreateCounter<long>("modmono.outbox.dead_lettered", description: "Outbox messages that exhausted all retries.");

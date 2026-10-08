@@ -19,6 +19,11 @@ internal sealed class CatalogOptionsValidator : IValidateOptions<CatalogOptions>
             failures.Add("ExchangeRateCacheSeconds must be between 1 and 86400.");
         }
 
+        if (options.PriceOutputCacheSeconds is < 1 or > 3600)
+        {
+            failures.Add("PriceOutputCacheSeconds must be between 1 and 3600.");
+        }
+
         if (!OptionsValidation.IsHttpUrl(options.ExchangeRatesBaseUrl))
         {
             failures.Add("ExchangeRatesBaseUrl must be an absolute http(s) URL.");

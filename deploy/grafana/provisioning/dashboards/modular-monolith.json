@@ -2,7 +2,7 @@
   "uid": "modular-monolith",
   "title": "Modular Monolith Overview",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "refresh": "30s",
   "time": {
     "from": "now-1h",
@@ -172,6 +172,54 @@
       "gridPos": {
         "x": 12,
         "y": 24,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Business: products, price changes, registrations / min",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(modmono_catalog_products_created_total[5m])) * 60",
+          "legendFormat": "products created"
+        },
+        {
+          "expr": "sum(rate(modmono_catalog_products_price_changes_total[5m])) * 60",
+          "legendFormat": "price changes"
+        },
+        {
+          "expr": "sum(rate(modmono_identity_users_registered_total[5m])) * 60",
+          "legendFormat": "users registered"
+        }
+      ],
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Slow database commands / min",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(modmono_db_slow_queries_total[5m])) * 60",
+          "legendFormat": "slow queries"
+        }
+      ],
+      "gridPos": {
+        "x": 12,
+        "y": 32,
         "w": 12,
         "h": 8
       }

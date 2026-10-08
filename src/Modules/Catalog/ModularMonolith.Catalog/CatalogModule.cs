@@ -1,4 +1,5 @@
 using System.Reflection;
+using Microsoft.AspNetCore.OutputCaching;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -35,8 +36,13 @@ public sealed class CatalogModule : IModule
     {
         services.AddValidatedOptions<CatalogOptions, CatalogOptionsValidator>(configuration, CatalogOptions.SectionName);
 
+        services.AddOptions<OutputCacheOptions>()
+            .Configure<IOptions<CatalogOptions>>((outputCache, catalog) => outputCache.AddPolicy(
+                CatalogOutputCache.PricePolicy,
+                CatalogOutputCache.CreatePricePolicy(TimeSpan.FromSeconds(catalog.Value.PriceOutputCacheSeconds))));
+
         services.AddScoped<IProductRepository, ProductRepository>();
-        services.AddScoped<ExchangeRateProvider>();
+        services.AddScoped<IExchangeRateProvider, ExchangeRateProvider>();
         services.AddRefitClient<IExchangeRatesApi>()
             .ConfigureHttpClient((provider, client) =>
                 client.BaseAddress = new Uri(provider.GetRequiredService<IOptions<CatalogOptions>>().Value.ExchangeRatesBaseUrl))

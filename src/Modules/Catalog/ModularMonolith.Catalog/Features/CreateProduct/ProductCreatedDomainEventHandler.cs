@@ -16,7 +16,7 @@ namespace ModularMonolith.Catalog.Features.CreateProduct;
 /// <item>invalidates every cached page of the tenant's product list, but only after a successful commit.</item>
 /// </list>
 /// </summary>
-internal sealed class PublishProductCreated(
+internal sealed class ProductCreatedDomainEventHandler(
     IOutbox outbox,
     ITenantContext tenantContext,
     IUnitOfWork unitOfWork,
@@ -37,6 +37,10 @@ internal sealed class PublishProductCreated(
                 domainEvent.SellerId),
             cancellationToken);
 
-        unitOfWork.OnCommitted(ct => cache.InvalidateAsync(CatalogCache.ProductList, ct));
+        unitOfWork.OnCommitted(async ct =>
+        {
+            await cache.InvalidateAsync(CatalogCache.ProductList, ct);
+            CatalogTelemetry.ProductsCreated.Add(1, new KeyValuePair<string, object?>("currency", domainEvent.Currency));
+        });
     }
 }
