@@ -29,6 +29,16 @@ internal sealed class HttpOptionsValidator : IValidateOptions<HttpOptions>
             failures.Add("HstsMaxAgeDays must be between 1 and 730.");
         }
 
+        if (options.ShutdownDrainSeconds is < 0 or > 60)
+        {
+            failures.Add("ShutdownDrainSeconds must be between 0 and 60.");
+        }
+
+        if (options.ShutdownTimeoutSeconds is < 5 or > 300)
+        {
+            failures.Add("ShutdownTimeoutSeconds must be between 5 and 300.");
+        }
+
         return OptionsValidation.ToResult(HttpOptions.SectionName, failures);
     }
 }

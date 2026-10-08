@@ -28,7 +28,12 @@ dotnet new modular-monolith -n MyCompany.Platform
 dotnet user-secrets --project src/Aspire/ModularMonolith.AppHost set "Parameters:postgres-password" "<pick one>"
 dotnet user-secrets --project src/Aspire/ModularMonolith.AppHost set "Parameters:keycloak-admin-password" "<pick one>"
 dotnet user-secrets --project src/Aspire/ModularMonolith.AppHost set "Parameters:grafana-admin-password" "<pick one>"
-dotnet run --project src/Aspire/ModularMonolith.AppHost
+dotnet user-secrets --project src/Aspire/ModularMonolith.AppHost set "Parameters:api-db-password" "<pick one>"
+dotnet run --project src/Aspire/ModularMonolith.AppHost      # runs "migrations" to completion, then starts "api"
+
+# Or run the host directly against your own PostgreSQL/Valkey/Keycloak (appsettings.Development.json):
+dotnet run --project src/Host/ModularMonolith.Host -- migrate   # schema owner: DDL, roles, grants; then exits
+dotnet run --project src/Host/ModularMonolith.Host              # least-privileged login: DML only
 
 # Or without Aspire (CI-like)
 copy deploy\.env.example deploy\.env   # then edit the passwords
@@ -144,8 +149,10 @@ ModularMonolithV1/
     ├── Host/ModularMonolith.Host/
     │   ├── Program.cs                          # composition root (module list lives here)
     │   ├── Configuration/                      # HttpPlatform, Security, Logging, BackgroundJobs, ApiConventions,
-    │   │                                       # SecurityHeadersMiddleware, *Options + *OptionsValidator
+    │   │                                       # SecurityHeadersMiddleware, GracefulShutdown, KeyRing (Data Protection),
+    │   │                                       # *Options + *OptionsValidator
     │   ├── Operations/                         # operator endpoints: outbox dead-letter list and replay
+    │   ├── Migrations/                         # `migrate` command, Hangfire schema step
     │   └── appsettings*.json  ModularMonolith.Host.http
     ├── Shared/
     │   ├── ModularMonolith.Shared.Kernel/      # pure building blocks
@@ -159,14 +166,16 @@ ModularMonolithV1/
     │       ├── Configuration/  AddValidatedOptions (bind + IValidateOptions + ValidateOnStart)
     │       ├── Serialization/  JsonDefaults (the single JSON convention)
     │       ├── Modules/        IModule, ModuleCatalog
-    │       ├── Data/           DbSession (IDbSession + IUnitOfWork), AuditChange, DapperTypeHandlers, SqlIdentifier
-    │       ├── Migrations/     ModuleMigrator (DbUp per module, advisory lock, grants)
+    │       ├── Data/           DbSession (IDbSession + IUnitOfWork), AuditChange, DapperTypeHandlers, SqlIdentifier,
+    │       │                   Migrations/001_platform.sql (Data Protection keys)
+    │       ├── Migrations/     ModuleMigrator (roles, login, DbUp per schema, advisory lock), MigrationOptions,
+    │       │                   IDatabaseSetupStep
     │       ├── Cqrs/           decorators, HandlerRegistration, DomainEventDispatcher, AuditWriter
     │       ├── Messaging/      Outbox, OutboxSignal + OutboxDispatcherService, OutboxProcessor (leases),
     │       │                   InProcessEventBus, Inbox decorator, OutboxAdministration (dead letters),
     │       │                   OutboxMetricsCollector, RetentionJob
     │       ├── Tenancy/        TenantContext, TenantResolutionMiddleware, TenancyOptions
-    │       ├── Security/       HttpCurrentUser, ClaimNames, AppRoles
+    │       ├── Security/       HttpCurrentUser, ClaimNames, AppRoles, PostgresXmlRepository (key ring store)
     │       ├── Caching/        ICacheStore, CacheRegion/CacheKey, CacheKeyFactory, ValkeyCacheStore (single-flight),
     │       │                   ValkeyConnection (async connect)
     │       ├── Idempotency/    FastEndpoints pre/post processors, IdempotencyPolicy, Valkey store
@@ -189,7 +198,7 @@ ModularMonolithV1/
         │       │   ├── GetProductPrice/ Endpoint, Query, Handler (currency conversion)
         │       │   └── SyncSeller/      UserRegisteredHandler (consumes Identity's event)
         │       ├── Infrastructure/  ProductRepository, CatalogCache (regions), ExchangeRates/ (Refit + ACL),
-        │       │                    Migrations/001_catalog.sql, 002_catalog_v2.sql
+        │       │                    Migrations/001_catalog.sql, 002_catalog_v2.sql, 003_catalog_grants.sql
         │       └── Resources/Catalog.en.json
         └── Identity/
             ├── ModularMonolith.Identity.Contracts/  UserRegisteredIntegrationEvent
@@ -197,7 +206,7 @@ ModularMonolithV1/
                 ├── IdentityModule.cs  IdentityOptions.cs  IdentityFeatures.cs
                 ├── Domain/          UserProfile, UserProfileId, Email, SubjectId, UserRegisteredDomainEvent, IdentityErrors
                 ├── Features/        RegisterUser/, GetCurrentUser/, ListUsers/
-                ├── Infrastructure/  UserProfileRepository, Keycloak/ (Refit + health check), Migrations/
+                ├── Infrastructure/  UserProfileRepository, Keycloak/ (Refit + health check), Migrations/001-003
                 └── Resources/Identity.en.json
 ```
 
@@ -424,7 +433,7 @@ create policy tenant_isolation on catalog.products
 5. **Caches and idempotency keys** contain the tenant (and the user for idempotency). Only regions explicitly declared `CacheScope.Shared` (e.g. exchange rates) are tenant-independent.
 6. **Logs and traces carry the tenant.** Requests and message consumers add a `TenantId` log property and a `tenant.id` span tag. Metrics never get tenant tags, to keep cardinality bounded.
 
-> **Production note:** connect with a non-superuser login that is a member of `modular_monolith_app` (`grant modular_monolith_app to <login>`). Run migrations with the schema owner.
+> **Production:** the application login (`Migrations:ApplicationLogin`, default `modular_monolith_api`) is a non-superuser that owns nothing; the migrator grants it membership of `modular_monolith_app`. Provision its password in your secret store and leave `Migrations:ApplicationLoginPassword` empty. See [Database identities and migrations](#database-identities-and-migrations).
 
 ## Messaging guarantees
 
@@ -439,14 +448,14 @@ create policy tenant_isolation on catalog.products
 | Exactly-once effect per consumer | Inbox `(message_id, handler)` is inserted in the consumer's transaction; handlers that already succeeded are skipped on redelivery |
 | Dead letters | Inspect and replay with the operator endpoints `GET /api/v1/ops/outbox/{module}/dead-letters` and `POST .../dead-letters[/{id}]/requeue` |
 | One trace end to end | The producer's W3C `traceparent` is stored with the message; consumer spans are its children |
-| Retention | Daily Hangfire job per module (`Retention:*`): delivered outbox rows after 7 days, inbox rows after 30 days, audit rows only if `AuditDays` > 0; dead letters are never purged |
+| Retention | Daily Hangfire job per module (`Retention:*`): delivered outbox rows after 7 days, inbox rows after 30 days; dead letters are never purged. The audit log is append-only for the application, so its retention is a DBA task run with owner rights |
 | Safe deserialization | Only types exported by registered `*.Contracts` assemblies can be loaded; there is no `dynamic` dispatch |
 
 ## Data access and caching
 
 - **Unit of work.** One connection and transaction per command, owned by the pipeline. Transient failures (connection loss, deadlock, serialization failure) before COMMIT re-run the whole unit of work on a fresh connection (`Database:TransientRetries`). A failure during COMMIT is never retried, because its outcome is unknown.
 - **Optimistic concurrency.** Every entity has a `version`. Updates are conditional on it and increment it; a stale version returns `409 concurrency_conflict`. `GET /catalog/products/{id}` returns the version and `PUT /catalog/products/{id}/price` expects it back.
-- **Audit trail.** Each command writes one `audit_log` row: who, what (payload), from where (IP), the trace id, and the before/after snapshot of every entity it changed (`changes` column).
+- **Audit trail.** Each command writes one `audit_log` row: who, what (payload), from where (IP), the trace id, and the before/after snapshot of every entity it changed (`changes` column). The application role can only `SELECT` and `INSERT` audit rows, never change or delete them.
 - **Cache keys.** Keys are built in one place (`CacheKeyFactory`): `mm:{environment}:{t:{tenant}|shared}:{module}:{resource}:s{schemaVersion}[:g{generation}]:{item}`. Regions are declared per module (e.g. `CatalogCache`). Item parts that are not simple identifiers are hashed, so user input never appears in a key.
 - **Stampede protection.** On a miss only one caller per key and instance runs the factory; the others wait and reuse the result. TTLs get up to 10% jitter.
 - **Invalidation.** Invalidatable regions have a generation counter: `InvalidateAsync(region)` drops every entry (e.g. all product-list pages) at once.
@@ -480,6 +489,7 @@ create policy tenant_isolation on catalog.products
   - Aspire uses secret parameters.
   - Compose uses `deploy/.env`, which is git-ignored.
   - Only local-development defaults are committed (`appsettings.Development.json`, dev realm demo users).
+- **Data Protection keys** (session cookies, antiforgery) are stored in PostgreSQL (`platform.data_protection_keys`), shared by all replicas and kept across restarts. Outside Development they must be encrypted at rest with a certificate (`DataProtection:CertificatePath` / `CertificatePassword`); the host refuses to start without one.
 
 ---
 
@@ -513,11 +523,55 @@ Every section is a strongly typed options class with an `IValidateOptions<T>` va
 | `Retention` | Days are 0 (keep) or positive; inbox kept at least 7 days; batch size and cron valid |
 | `Localization` | At least one known culture |
 | `RateLimiting` | Permit limit and window within range |
-| `Http` | Timeout, body size, HTTPS port and HSTS max-age within range |
+| `Http` | Timeout, body size, HTTPS port, HSTS max-age, shutdown drain and shutdown timeout within range |
+| `Migrations` (migrate command only) | Owner connection string present; application role and login are SQL identifiers; a login password requires a login |
+| `DataProtection` | Application name set; a certificate file is required when `RequireEncryptionAtRest` (default outside Development) |
 | `ReverseProxy` | Proxies are IP addresses, networks are CIDR ranges, forward limit 1–10 |
 | `Modules:Catalog`, `Modules:Identity` | Cache TTLs within range; URLs are absolute http(s) |
 
 Behind a TLS-terminating load balancer or ingress, set `ReverseProxy__KnownNetworks__0=<ingress CIDR>` so the client IP (rate limiting, audit) and the https scheme are taken from `X-Forwarded-*`.
+
+## Database identities and migrations
+
+| Identity | Used by | Privileges |
+|---|---|---|
+| Schema owner (`ConnectionStrings:postgres-migrations`) | Only the `migrate` command | DDL; owns every schema; creates roles |
+| `modular_monolith_app` (NOLOGIN role) | Holder of the application's privileges | Exactly what each table needs, granted in the migrations (`$app_role$`) |
+| `modular_monolith_api` (login, `ConnectionStrings:postgres`) | The serving application | Member of `modular_monolith_app`; owns nothing; every session also runs `SET ROLE modular_monolith_app`, so row-level security always applies |
+
+Privileges per table (see `003_*_grants.sql` and `001_platform.sql`):
+
+| Table | Application privileges |
+|---|---|
+| Business tables (`products`, `sellers`, `user_profiles`) | `SELECT, INSERT, UPDATE` (soft delete; no `DELETE`) |
+| `audit_log` | `SELECT, INSERT` (append-only) |
+| `outbox_messages` | `SELECT, INSERT, UPDATE, DELETE` (dispatch and retention) |
+| `inbox_messages` | `SELECT, INSERT, DELETE` (retention) |
+| `platform.data_protection_keys` | `SELECT, INSERT` |
+| `hangfire.*` | DML only; the schema is installed by the migrator (`PrepareSchemaIfNecessary = false`) |
+| `*.schema_versions` (migration journals) | none |
+
+**Migrations run as a separate step**, never inside the serving process: `dotnet ModularMonolith.Host.dll migrate` applies the platform and module scripts (DbUp, advisory-locked), installs the Hangfire schema, ensures the role and login, and exits with 0 or 1.
+
+| Environment | How migrations run |
+|---|---|
+| Aspire | `migrations` resource (same project, `migrate` argument); the API waits for its completion |
+| Compose | one-shot `migrations` service; the API depends on `service_completed_successfully` |
+| Production | the same image as a pre-deployment job (CI/CD step or Kubernetes `Job`), with the owner connection string from the secret store |
+
+Keep migrations backward compatible (expand, then contract in a later release), because the previous version keeps running while the new one rolls out.
+
+## Graceful shutdown and container settings
+
+On SIGTERM the host:
+
+1. Turns `/health/ready` unhealthy immediately, so load balancers stop sending traffic.
+2. Keeps serving for `Http:ShutdownDrainSeconds` (default 5).
+3. Stops accepting connections and gives in-flight requests and background work up to `Http:ShutdownTimeoutSeconds` (default 25) to finish.
+
+The orchestrator's grace period must exceed drain + timeout: compose sets `stop_grace_period: 45s` (use `terminationGracePeriodSeconds` in Kubernetes).
+
+Compose also defines CPU and memory limits for every service and a readiness healthcheck for the API (`/health/ready`, probed with bash because the runtime image has no curl).
 
 ---
 
@@ -533,7 +587,7 @@ Behind a TLS-terminating load balancer or ingress, set `ReverseProxy__KnownNetwo
 
 1. Create `src/Modules/<Name>/ModularMonolith.<Name>` and `ModularMonolith.<Name>.Contracts`. Copy a csproj; reference Kernel, Shared.Infrastructure and only other modules' `*.Contracts`.
 2. Add a public `<Name>Module : IModule` with a unique `Schema`.
-3. Add `Infrastructure/Migrations/001_<name>.sql` with the tables. Include `tenant_id`, `version` and the RLS policy, plus `outbox_messages`, `inbox_messages` and `audit_log` with the columns of Catalog's `001` and `002` scripts. Never edit an applied migration; add the next numbered script instead.
+3. Add `Infrastructure/Migrations/001_<name>.sql` with the tables. Include `tenant_id`, `version` and the RLS policy, plus `outbox_messages`, `inbox_messages` and `audit_log` with the columns of Catalog's `001` and `002` scripts, and explicit grants to `$app_role$` like Catalog's `003` script (no schema-wide grants). Never edit an applied migration; add the next numbered script instead.
 4. Add `new <Name>Module()` to the module list in `Host/Program.cs` and a project reference in the Host csproj.
 
 ---

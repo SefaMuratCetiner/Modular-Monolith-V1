@@ -21,4 +21,13 @@ internal sealed class HttpOptions
 
     /// <summary>Gets or sets the HSTS max-age in days.</summary>
     public int HstsMaxAgeDays { get; set; } = 365;
+
+    /// <summary>
+    /// Gets or sets how long the host keeps serving after SIGTERM with readiness already unhealthy,
+    /// so load balancers stop routing new requests before connections close.
+    /// </summary>
+    public int ShutdownDrainSeconds { get; set; } = 5;
+
+    /// <summary>Gets or sets how long in-flight requests and background work get to finish after the drain.</summary>
+    public int ShutdownTimeoutSeconds { get; set; } = 25;
 }

@@ -9,7 +9,7 @@ internal sealed class RetentionOptionsValidator : IValidateOptions<RetentionOpti
     public ValidateOptionsResult Validate(string? name, RetentionOptions options)
     {
         var failures = new List<string>();
-        if (options.ProcessedOutboxDays < 0 || options.InboxDays < 0 || options.AuditDays < 0)
+        if (options.ProcessedOutboxDays < 0 || options.InboxDays < 0)
         {
             failures.Add("Retention days must be 0 (keep forever) or positive.");
         }

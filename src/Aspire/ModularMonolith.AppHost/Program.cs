@@ -14,6 +14,15 @@ var postgres = builder.AddPostgres("postgres-server", password: postgresPassword
     .WithPgAdmin();
 var database = postgres.AddDatabase("postgres", databaseName: "modular_monolith");
 
+// Two database identities:
+// - the schema owner (the server's superuser here) is given ONLY to the migrations resource;
+// - the API connects as "modular_monolith_api", a login that owns nothing and only has the DML
+//   privileges granted to the "modular_monolith_app" role. The migrator creates it with this password.
+var apiDbPassword = builder.AddParameter("api-db-password", secret: true);
+var postgresEndpoint = postgres.Resource.PrimaryEndpoint;
+var apiConnectionString = ReferenceExpression.Create(
+    $"Host={postgresEndpoint.Property(EndpointProperty.Host)};Port={postgresEndpoint.Property(EndpointProperty.Port)};Database=modular_monolith;Username=modular_monolith_api;Password={apiDbPassword}");
+
 // Valkey: BSD-licensed, Redis-protocol compatible cache (Redis 7.4+ is no longer OSI open source).
 var cache = builder.AddValkey("cache")
     .WithDataVolume();
@@ -60,10 +69,21 @@ builder.AddContainer("grafana", "grafana/grafana", "12.1.1")
     .WaitFor(tempo);
 
 // ---------------------------------------------------------------------------------------------
+// Migrations: the same project in `migrate` mode, run to completion before the API starts.
+// No launch profile: it is a short-lived console process without HTTP endpoints.
+// ---------------------------------------------------------------------------------------------
+var migrations = builder.AddProject<Projects.ModularMonolith_Host>("migrations", launchProfileName: null)
+    .WithArgs("migrate")
+    .WithEnvironment("DOTNET_ENVIRONMENT", "Development")
+    .WithEnvironment("ConnectionStrings__postgres-migrations", database)
+    .WithEnvironment("Migrations__ApplicationLoginPassword", apiDbPassword)
+    .WaitFor(database);
+
+// ---------------------------------------------------------------------------------------------
 // API host
 // ---------------------------------------------------------------------------------------------
 builder.AddProject<Projects.ModularMonolith_Host>("api")
-    .WithReference(database)
+    .WithEnvironment("ConnectionStrings__postgres", apiConnectionString)
     .WithReference(cache)
     .WithEnvironment("Authentication__Authority", ReferenceExpression.Create($"{keycloakHttp}/realms/modular-monolith"))
     .WithEnvironment("Observability__LokiUrl", loki.GetEndpoint("http"))
@@ -71,7 +91,7 @@ builder.AddProject<Projects.ModularMonolith_Host>("api")
     .WithEnvironment("Observability__OtlpMetrics", "true")
     .WithEnvironment("Observability__OtlpLogs", "true")
     .WithHttpHealthCheck("/health/ready")
-    .WaitFor(database)
+    .WaitForCompletion(migrations)
     .WaitFor(cache)
     .WaitFor(keycloak);
 

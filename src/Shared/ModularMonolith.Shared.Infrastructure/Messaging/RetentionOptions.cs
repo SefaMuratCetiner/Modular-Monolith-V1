@@ -17,12 +17,6 @@ public sealed class RetentionOptions
     /// </summary>
     public int InboxDays { get; set; } = 30;
 
-    /// <summary>
-    /// Gets or sets how long audit rows are kept (0 = forever). Purging audit rows requires the
-    /// maintenance login to bypass row-level security (superuser or <c>BYPASSRLS</c>).
-    /// </summary>
-    public int AuditDays { get; set; }
-
     /// <summary>Gets or sets the rows deleted per statement (keeps locks and WAL bursts small).</summary>
     public int BatchSize { get; set; } = 5000;
 

@@ -19,9 +19,9 @@ internal sealed class DatabaseOptionsValidator(IConfiguration configuration) : I
             failures.Add($"ConnectionStrings:{options.ConnectionStringName} is not configured.");
         }
 
-        if (!string.IsNullOrEmpty(options.ApplicationRole) && !SqlIdentifier.IsValid(options.ApplicationRole))
+        if (!SqlIdentifier.IsValid(options.ApplicationRole))
         {
-            failures.Add("ApplicationRole must be a lowercase SQL identifier (or empty).");
+            failures.Add("ApplicationRole must be a lowercase SQL identifier.");
         }
 
         if (options.TransientRetries is < 0 or > 5)

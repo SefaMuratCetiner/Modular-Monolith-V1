@@ -121,7 +121,7 @@ public static class SharedInfrastructureExtensions
     }
 
     /// <summary>
-    /// Runs module migrations (advisory-locked) and schedules one recurring outbox sweep per module.
+    /// Connects to Valkey and schedules the recurring outbox sweep and retention job per module.
     /// </summary>
     /// <param name="services">The root service provider.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
@@ -133,10 +133,8 @@ public static class SharedInfrastructureExtensions
         // Connect to Valkey asynchronously before any request can need it (never sync-over-async later).
         await services.GetRequiredService<ValkeyConnection>().ConnectAsync(cancellationToken);
 
-        if (services.GetRequiredService<IOptions<DatabaseOptions>>().Value.MigrateOnStartup)
-        {
-            await services.GetRequiredService<ModuleMigrator>().MigrateAsync(cancellationToken);
-        }
+        // Migrations are NOT run here: the serving application has no DDL rights. They run in the
+        // separate `migrate` command with the schema owner's credentials (see AddModuleMigrations).
 
         var sweepCron = services.GetRequiredService<IOptions<OutboxOptions>>().Value.SweepCron;
         var retentionCron = services.GetRequiredService<IOptions<RetentionOptions>>().Value.Cron;
@@ -155,6 +153,28 @@ public static class SharedInfrastructureExtensions
         }
     }
 
+    /// <summary>
+    /// Registers the services of the <c>migrate</c> command: the module catalog, validated database and
+    /// migration settings and the <see cref="ModuleMigrator"/>. Used instead of
+    /// <see cref="AddSharedInfrastructure"/> by the short-lived migration process.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="configuration">The configuration.</param>
+    /// <param name="modules">The modules whose schemas are migrated.</param>
+    /// <returns>The service collection.</returns>
+    public static IServiceCollection AddModuleMigrations(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        IReadOnlyCollection<IModule> modules)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        services.AddSingleton(new ModuleCatalog(modules));
+        services.AddOptions<DatabaseOptions>().Bind(configuration.GetSection(DatabaseOptions.SectionName));
+        services.AddValidatedOptions<MigrationOptions, MigrationOptionsValidator>(configuration, MigrationOptions.SectionName);
+        services.AddSingleton<ModuleMigrator>();
+        return services;
+    }
+
     private static void AddData(IServiceCollection services, IConfiguration configuration)
     {
         DapperTypeHandlers.Register();
@@ -168,7 +188,6 @@ public static class SharedInfrastructureExtensions
         services.AddScoped<DbSession>();
         services.AddScoped<IDbSession>(provider => provider.GetRequiredService<DbSession>());
         services.AddScoped<IUnitOfWork>(provider => provider.GetRequiredService<DbSession>());
-        services.AddSingleton<ModuleMigrator>();
     }
 
     private static void AddMessaging(IServiceCollection services)

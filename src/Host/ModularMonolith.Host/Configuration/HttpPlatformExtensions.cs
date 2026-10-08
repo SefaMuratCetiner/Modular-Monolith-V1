@@ -28,6 +28,7 @@ internal static class HttpPlatformExtensions
 
         AddTransport(services);
         AddResponseConventions(services);
+        services.AddGracefulShutdown();
         return builder;
     }
 

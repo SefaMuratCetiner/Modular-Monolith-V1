@@ -30,4 +30,9 @@
     <ProjectReference Include="..\ModularMonolith.Shared.Kernel\ModularMonolith.Shared.Kernel.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Platform-level SQL migrations (schema "platform"), applied by the migrate command. -->
+    <EmbeddedResource Include="Data\Migrations\*.sql" />
+  </ItemGroup>
+
 </Project>

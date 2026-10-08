@@ -9,8 +9,9 @@ using Npgsql;
 namespace ModularMonolith.Shared.Infrastructure.Messaging;
 
 /// <summary>
-/// Daily Hangfire job that purges old rows from a module's outbox (delivered messages only),
-/// inbox and, when configured, audit log. Deletes run in small batches to keep locks short.
+/// Daily Hangfire job that purges old rows from a module's outbox (delivered messages only) and inbox.
+/// Deletes run in small batches to keep locks short. The audit log is append-only for the application
+/// (no DELETE grant); its retention is a database maintenance task run with owner rights.
 /// </summary>
 public sealed class RetentionJob(
     NpgsqlDataSource dataSource,
@@ -39,11 +40,6 @@ public sealed class RetentionJob(
         if (settings.InboxDays > 0)
         {
             await PurgeAsync($"{quoted}.inbox_messages", "processed_at < @Cutoff", now.AddDays(-settings.InboxDays), settings.BatchSize, cancellationToken);
-        }
-
-        if (settings.AuditDays > 0)
-        {
-            await PurgeAsync($"{quoted}.audit_log", "occurred_at < @Cutoff", now.AddDays(-settings.AuditDays), settings.BatchSize, cancellationToken);
         }
     }
 

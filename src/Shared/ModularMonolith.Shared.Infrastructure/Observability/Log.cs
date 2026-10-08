@@ -43,6 +43,9 @@ internal static partial class Log
     [LoggerMessage(EventId = 1300, Level = LogLevel.Information, Message = "Applied {Count} migration script(s) for module {Module}")]
     public static partial void MigrationsApplied(this ILogger logger, int count, string module);
 
+    [LoggerMessage(EventId = 1301, Level = LogLevel.Information, Message = "Database setup step {Step} completed")]
+    public static partial void SetupStepCompleted(this ILogger logger, string step);
+
     [LoggerMessage(EventId = 1400, Level = LogLevel.Warning, Message = "After-commit callback failed")]
     public static partial void AfterCommitFailed(this ILogger logger, Exception exception);
 

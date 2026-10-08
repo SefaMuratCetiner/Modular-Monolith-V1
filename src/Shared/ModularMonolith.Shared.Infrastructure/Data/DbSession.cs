@@ -53,11 +53,9 @@ internal sealed class DbSession(
             await using var command = connection.CreateCommand();
             var role = options.Value.ApplicationRole;
 
-            // 1) Drop superuser privileges so RLS applies. 2) Bind the tenant for RLS policies.
+            // 1) Restrict the session to the application role (DML only, RLS enforced). 2) Bind the tenant for RLS.
             //    An unresolved tenant binds '' which matches no rows and fails CHECK constraints (fail closed).
-            command.CommandText = string.IsNullOrWhiteSpace(role)
-                ? "select set_config('app.tenant_id', @tenant, false)"
-                : $"set role {SqlIdentifier.Quote(role)}; select set_config('app.tenant_id', @tenant, false)";
+            command.CommandText = $"set role {SqlIdentifier.Quote(role)}; select set_config('app.tenant_id', @tenant, false)";
             command.Parameters.AddWithValue("tenant", tenantContext.IsResolved ? tenantContext.TenantId : string.Empty);
             await command.ExecuteNonQueryAsync(cancellationToken);
         }

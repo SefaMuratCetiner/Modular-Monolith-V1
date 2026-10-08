@@ -3,21 +3,31 @@ using FastEndpoints.Swagger;
 using Microsoft.FeatureManagement;
 using ModularMonolith.Catalog;
 using ModularMonolith.Host.Configuration;
+using ModularMonolith.Host.Migrations;
 using ModularMonolith.Identity;
 using ModularMonolith.ServiceDefaults;
 using ModularMonolith.Shared.Infrastructure;
 using ModularMonolith.Shared.Infrastructure.Modules;
 using Serilog;
 
-var builder = WebApplication.CreateBuilder(args);
-
 // The modules composed into this host. This is the ONLY place the host knows about modules.
 IModule[] modules = [new CatalogModule(), new IdentityModule()];
 
+// `migrate`: apply database migrations with the schema owner's credentials and exit.
+// The serving application below never runs DDL.
+if (args is [MigrationCommand.Name, ..])
+{
+    return await MigrationCommand.RunAsync(args[1..], modules);
+}
+
+var builder = WebApplication.CreateBuilder(args);
+
 builder.AddServiceDefaults();               // OpenTelemetry, health checks, resilient HttpClient
 builder.AddLogging();                       // Serilog -> console, Loki, OTLP
-builder.AddHttpPlatform();                  // Kestrel limits, proxy headers, HTTPS/HSTS, JSON, problem details, timeouts, compression
+builder.AddHttpPlatform();                  // Kestrel limits, proxy headers, HTTPS/HSTS, JSON, problem details, timeouts,
+                                            // compression, graceful shutdown (readiness drain)
 builder.AddSecurity();                      // JWT (API) + cookie/OIDC (browser), authorization, rate limits
+builder.AddKeyRing();                       // Data Protection keys in PostgreSQL, encrypted at rest
 builder.AddBackgroundJobs();                // Hangfire on PostgreSQL (outbox dispatch)
 builder.Services.AddSharedInfrastructure(builder.Configuration, modules);
 builder.Services.AddFeatureManagement();
@@ -61,3 +71,4 @@ app.MapJobDashboard();                      // /hangfire (operator role)
 
 await app.Services.InitializeModulesAsync(app.Lifetime.ApplicationStopping);
 await app.RunAsync();
+return 0;

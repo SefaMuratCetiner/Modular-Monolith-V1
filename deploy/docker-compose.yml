@@ -2,23 +2,48 @@
 # (copy .env.example). Development defaults apply when a variable is unset.
 #
 #   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.yml up --build
+#
+# Database identities:
+#   - postgres (schema owner)       -> only the one-shot "migrations" service
+#   - modular_monolith_api (DML)    -> the "api" service; created by the migrator, member of modular_monolith_app
 name: modular-monolith
 
+x-app-image: &app-image
+  build:
+    context: ..
+    dockerfile: Dockerfile
+  image: modular-monolith-api:local
+
 services:
+  migrations:
+    <<: *app-image
+    command: [ "migrate" ]
+    restart: "no"
+    environment:
+      DOTNET_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      ConnectionStrings__postgres-migrations: Host=postgres;Port=5432;Database=modular_monolith;Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-postgres}
+      Migrations__ApplicationLogin: modular_monolith_api
+      Migrations__ApplicationLoginPassword: ${APP_DB_PASSWORD:-dev-only-api-password}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits: { cpus: "0.50", memory: 256M }
+
   api:
-    build:
-      context: ..
-      dockerfile: Dockerfile
+    <<: *app-image
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
-      ConnectionStrings__postgres: Host=postgres;Port=5432;Database=modular_monolith;Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-postgres}
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__postgres: Host=postgres;Port=5432;Database=modular_monolith;Username=modular_monolith_api;Password=${APP_DB_PASSWORD:-dev-only-api-password}
       ConnectionStrings__cache: valkey:6379
       Authentication__Authority: http://keycloak:8080/realms/modular-monolith
       OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
       Observability__LokiUrl: http://loki:3100
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
       valkey:
         condition: service_healthy
       keycloak:
@@ -29,6 +54,20 @@ services:
         condition: service_started
     ports:
       - "8081:8080"
+    # Readiness: 200 only when dependencies are reachable and the host is not draining.
+    # The runtime image has bash but no curl, so the probe uses /dev/tcp.
+    healthcheck:
+      test: [ "CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && head -n 1 <&3 | grep -q ' 200 '" ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    # Must exceed Http:ShutdownDrainSeconds + Http:ShutdownTimeoutSeconds (5 + 25 by default).
+    stop_grace_period: 45s
+    deploy:
+      resources:
+        limits: { cpus: "1.00", memory: 512M }
+        reservations: { memory: 256M }
 
   postgres:
     image: postgres:17.6-alpine
@@ -45,6 +84,9 @@ services:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits: { cpus: "1.00", memory: 1G }
 
   valkey:
     image: valkey/valkey:8.1.3-alpine
@@ -55,6 +97,9 @@ services:
       retries: 10
     ports:
       - "6379:6379"
+    deploy:
+      resources:
+        limits: { cpus: "0.50", memory: 256M }
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.3.3
@@ -68,6 +113,9 @@ services:
       - "8080:8080"
     volumes:
       - ./keycloak:/opt/keycloak/data/import:ro
+    deploy:
+      resources:
+        limits: { cpus: "1.00", memory: 1G }
 
   tempo:
     image: grafana/tempo:2.8.2
@@ -77,6 +125,9 @@ services:
       - "4317:4317"
     volumes:
       - ./grafana/tempo.yaml:/etc/tempo.yaml:ro
+    deploy:
+      resources:
+        limits: { cpus: "0.50", memory: 512M }
 
   loki:
     image: grafana/loki:3.5.3
@@ -85,6 +136,9 @@ services:
       - "3100:3100"
     volumes:
       - ./grafana/loki.yaml:/etc/loki/local-config.yaml:ro
+    deploy:
+      resources:
+        limits: { cpus: "0.50", memory: 512M }
 
   prometheus:
     image: prom/prometheus:v3.5.0
@@ -92,6 +146,9 @@ services:
       - "9090:9090"
     volumes:
       - ./grafana/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+    deploy:
+      resources:
+        limits: { cpus: "0.50", memory: 512M }
 
   grafana:
     image: grafana/grafana:12.1.1
@@ -107,6 +164,9 @@ services:
       - prometheus
       - tempo
       - loki
+    deploy:
+      resources:
+        limits: { cpus: "0.50", memory: 512M }
 
 volumes:
   postgres-data:

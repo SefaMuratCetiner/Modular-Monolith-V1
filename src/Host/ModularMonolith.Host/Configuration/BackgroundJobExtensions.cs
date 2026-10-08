@@ -1,5 +1,6 @@
 using Hangfire;
 using Hangfire.PostgreSql;
+using ModularMonolith.Host.Migrations;
 
 namespace ModularMonolith.Host.Configuration;
 
@@ -20,7 +21,13 @@ internal static class BackgroundJobExtensions
             .UseRecommendedSerializerSettings()
             .UsePostgreSqlStorage(
                 options => options.UseNpgsqlConnection(connectionString),
-                new PostgreSqlStorageOptions { SchemaName = "hangfire", PrepareSchemaIfNecessary = true }));
+                new PostgreSqlStorageOptions
+                {
+                    SchemaName = HangfireSchemaStep.Schema,
+
+                    // The schema is installed by the migrate command; the application has no DDL rights.
+                    PrepareSchemaIfNecessary = false,
+                }));
 
         builder.Services.AddHangfireServer(options =>
         {

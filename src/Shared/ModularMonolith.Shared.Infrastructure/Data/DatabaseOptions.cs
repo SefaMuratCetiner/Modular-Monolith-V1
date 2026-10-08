@@ -12,10 +12,9 @@ public sealed class DatabaseOptions
     public string ConnectionStringName { get; set; } = "postgres";
 
     /// <summary>
-    /// Gets or sets the non-superuser role every application connection switches to (<c>SET ROLE</c>).
-    /// Row-level security never applies to superusers, so this guarantees tenant isolation even when
-    /// the login used in development is a superuser. Leave empty only if the login itself is a
-    /// non-superuser that owns no tables.
+    /// Gets or sets the <c>NOLOGIN</c> role that holds the application's table privileges. The application
+    /// login is a member of it and every session additionally switches to it (<c>SET ROLE</c>), so the
+    /// connection never has more than these privileges and row-level security always applies.
     /// </summary>
     public string ApplicationRole { get; set; } = "modular_monolith_app";
 
@@ -24,7 +23,4 @@ public sealed class DatabaseOptions
     /// (connection loss, deadlock, serialization failure) that happened before commit.
     /// </summary>
     public int TransientRetries { get; set; } = 2;
-
-    /// <summary>Gets or sets a value indicating whether migrations run at startup.</summary>
-    public bool MigrateOnStartup { get; set; } = true;
 }
