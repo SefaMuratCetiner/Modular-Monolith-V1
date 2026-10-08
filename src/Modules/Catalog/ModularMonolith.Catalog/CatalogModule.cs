@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using ModularMonolith.Catalog.Contracts;
 using ModularMonolith.Catalog.Infrastructure;
 using ModularMonolith.Catalog.Infrastructure.ExchangeRates;
+using ModularMonolith.Shared.Infrastructure.Configuration;
 using ModularMonolith.Shared.Infrastructure.Modules;
 using Refit;
 
@@ -32,10 +33,7 @@ public sealed class CatalogModule : IModule
     /// <inheritdoc />
     public void AddServices(IServiceCollection services, IConfiguration configuration)
     {
-        services.AddOptions<CatalogOptions>()
-            .Bind(configuration.GetSection(CatalogOptions.SectionName))
-            .Validate(options => Uri.IsWellFormedUriString(options.ExchangeRatesBaseUrl, UriKind.Absolute), "Catalog:ExchangeRatesBaseUrl must be an absolute URL.")
-            .ValidateOnStart();
+        services.AddValidatedOptions<CatalogOptions, CatalogOptionsValidator>(configuration, CatalogOptions.SectionName);
 
         services.AddScoped<IProductRepository, ProductRepository>();
         services.AddScoped<ExchangeRateProvider>();

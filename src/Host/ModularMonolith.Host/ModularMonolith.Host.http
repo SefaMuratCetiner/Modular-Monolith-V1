@@ -29,8 +29,12 @@ Idempotency-Key: create-widget-1
 
 { "name": "Widget", "sku": "WID-001", "price": 19.99, "currency": "USD" }
 
-### List products of the caller's tenant
-GET {{host}}/api/v1/catalog/products
+### List products of the caller's tenant (paged: page >= 1, 1 <= pageSize <= 100)
+GET {{host}}/api/v1/catalog/products?page=1&pageSize=20
+Authorization: Bearer {{accessToken}}
+
+### Get one product (use the id from the Location header of the create call)
+GET {{host}}/api/v1/catalog/products/00000000-0000-0000-0000-000000000000
 Authorization: Bearer {{accessToken}}
 
 ### Health and metrics (anonymous)

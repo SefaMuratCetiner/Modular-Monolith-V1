@@ -3,6 +3,7 @@ using System.Text.Json;
 using Dapper;
 using Microsoft.AspNetCore.Http;
 using ModularMonolith.Shared.Infrastructure.Data;
+using ModularMonolith.Shared.Infrastructure.Serialization;
 using ModularMonolith.Shared.Kernel.Context;
 
 namespace ModularMonolith.Shared.Infrastructure.Cqrs;
@@ -17,8 +18,6 @@ internal sealed class AuditWriter(
     TimeProvider timeProvider,
     IHttpContextAccessor httpContextAccessor)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
     public async Task WriteAsync<TCommand>(string schema, string action, TCommand command, CancellationToken cancellationToken)
     {
         var connection = await session.GetConnectionAsync(cancellationToken);
@@ -33,7 +32,7 @@ internal sealed class AuditWriter(
                 Id = Guid.CreateVersion7(),
                 UserId = currentUser.AuditId,
                 Action = action,
-                Payload = JsonSerializer.Serialize(command, JsonOptions),
+                Payload = JsonSerializer.Serialize(command, JsonDefaults.Options),
                 OccurredAt = timeProvider.GetUtcNow(),
                 IpAddress = httpContextAccessor.HttpContext?.Connection.RemoteIpAddress?.ToString(),
                 TraceId = Activity.Current?.TraceId.ToString(),

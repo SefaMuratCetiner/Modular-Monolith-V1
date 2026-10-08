@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using ModularMonolith.Identity.Contracts;
 using ModularMonolith.Identity.Infrastructure;
 using ModularMonolith.Identity.Infrastructure.Keycloak;
+using ModularMonolith.Shared.Infrastructure.Configuration;
 using ModularMonolith.Shared.Infrastructure.Modules;
 using Refit;
 
@@ -30,11 +31,8 @@ public sealed class IdentityModule : IModule
     /// <inheritdoc />
     public void AddServices(IServiceCollection services, IConfiguration configuration)
     {
-        services.AddOptions<IdentityOptions>()
-            .Bind(configuration.GetSection(IdentityOptions.SectionName))
-            .PostConfigure(options => options.Authority ??= configuration["Authentication:Authority"])
-            .Validate(options => Uri.IsWellFormedUriString(options.Authority, UriKind.Absolute), "Modules:Identity:Authority (or Authentication:Authority) must be an absolute URL.")
-            .ValidateOnStart();
+        services.AddValidatedOptions<IdentityOptions, IdentityOptionsValidator>(configuration, IdentityOptions.SectionName)
+            .PostConfigure(options => options.Authority ??= configuration["Authentication:Authority"]);
 
         services.AddScoped<IUserProfileRepository, UserProfileRepository>();
         services.AddRefitClient<IKeycloakMetadataApi>()

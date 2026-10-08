@@ -1,6 +1,7 @@
 using FastEndpoints;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using ModularMonolith.Catalog.Features.GetProduct;
 using ModularMonolith.Shared.Infrastructure.Idempotency;
 using ModularMonolith.Shared.Infrastructure.Web;
 using CreateProductHandler = ModularMonolith.Shared.Kernel.Cqrs.ICommandHandler<
@@ -22,6 +23,17 @@ internal sealed class CreateProductEndpoint(CreateProductHandler handler)
         Options(builder => builder.WithTags("Catalog").RequireRateLimiting(RateLimitPolicies.PerUser));
         PreProcessor<IdempotencyPreProcessor<CreateProductRequest>>();
         PostProcessor<IdempotencyPostProcessor<CreateProductRequest, CreateProductResponse>>();
+        Description(
+            builder => builder
+                .Accepts<CreateProductRequest>("application/json")
+                .Produces<CreateProductResponse>(StatusCodes.Status201Created)
+                .ProducesProblems(
+                    StatusCodes.Status400BadRequest,
+                    StatusCodes.Status403Forbidden,
+                    StatusCodes.Status409Conflict,
+                    StatusCodes.Status422UnprocessableEntity,
+                    StatusCodes.Status503ServiceUnavailable),
+            clearDefaults: true);
         Summary(summary =>
         {
             summary.Summary = "Creates a product in the caller's tenant.";
@@ -38,7 +50,7 @@ internal sealed class CreateProductEndpoint(CreateProductHandler handler)
             return;
         }
 
-        HttpContext.Response.Headers.Location = $"/api/v1/catalog/products/{result.Value}/price";
+        HttpContext.Response.Headers.Location = GetProductEndpoint.LocationFor(result.Value);
         await Send.ResponseAsync(new CreateProductResponse(result.Value), StatusCodes.Status201Created, ct);
     }
 }

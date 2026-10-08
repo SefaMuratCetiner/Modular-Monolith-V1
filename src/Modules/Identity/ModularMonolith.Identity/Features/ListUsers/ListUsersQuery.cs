@@ -1,7 +1,8 @@
 using ModularMonolith.Identity.Features.GetCurrentUser;
 using ModularMonolith.Shared.Kernel.Cqrs;
+using ModularMonolith.Shared.Kernel.Paging;
 
 namespace ModularMonolith.Identity.Features.ListUsers;
 
-/// <summary>Lists the profiles of the current tenant (admin only), paged.</summary>
-internal sealed record ListUsersQuery(int Page, int PageSize) : IQuery<IReadOnlyList<UserProfileView>>;
+/// <summary>Lists one page of the current tenant's profiles (admin only), ordered by display name.</summary>
+internal sealed record ListUsersQuery(PageRequest Paging) : IQuery<PagedResult<UserProfileView>>;

@@ -19,6 +19,16 @@ internal sealed class RegisterUserEndpoint(RegisterUserHandler handler)
         Options(builder => builder.WithTags("Identity").RequireRateLimiting(RateLimitPolicies.PerUser));
         PreProcessor<IdempotencyPreProcessor<RegisterUserRequest>>();
         PostProcessor<IdempotencyPostProcessor<RegisterUserRequest, RegisterUserResponse>>();
+        Description(
+            builder => builder
+                .Accepts<RegisterUserRequest>("application/json")
+                .Produces<RegisterUserResponse>(StatusCodes.Status201Created)
+                .ProducesProblems(
+                    StatusCodes.Status400BadRequest,
+                    StatusCodes.Status403Forbidden,
+                    StatusCodes.Status409Conflict,
+                    StatusCodes.Status422UnprocessableEntity),
+            clearDefaults: true);
         Summary(summary => summary.Summary = "Registers a profile for the authenticated user.");
     }
 

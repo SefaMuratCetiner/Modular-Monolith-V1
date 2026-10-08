@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using FastEndpoints;
 using FastEndpoints.Swagger;
 using Microsoft.FeatureManagement;
@@ -17,12 +16,11 @@ IModule[] modules = [new CatalogModule(), new IdentityModule()];
 
 builder.AddServiceDefaults();               // OpenTelemetry, health checks, resilient HttpClient
 builder.AddLogging();                       // Serilog -> console, Loki, OTLP
+builder.AddHttpPlatform();                  // Kestrel limits, proxy headers, HTTPS/HSTS, JSON, problem details, timeouts, compression
 builder.AddSecurity();                      // JWT (API) + cookie/OIDC (browser), authorization, rate limits
 builder.AddBackgroundJobs();                // Hangfire on PostgreSQL (outbox dispatch)
 builder.Services.AddSharedInfrastructure(builder.Configuration, modules);
 builder.Services.AddFeatureManagement();
-builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
-    context.ProblemDetails.Extensions["traceId"] = Activity.Current?.TraceId.ToString() ?? context.HttpContext.TraceIdentifier);
 builder.Services.AddFastEndpoints(options =>
 {
     options.Assemblies = modules.Select(module => module.Assembly);
@@ -43,23 +41,18 @@ if (builder.Environment.IsDevelopment())
 
 var app = builder.Build();
 
-app.UseExceptionHandler();
+app.UseHttpPlatform();                      // forwarded headers, exception handler, HSTS/HTTPS, security headers, compression
 app.UseSerilogRequestLogging();
 app.UseConfiguredRequestLocalization();
 app.UseAuthentication();
 app.UseTenantResolution();                  // after authentication: tenant comes from the token
+app.UseRequestTimeouts();
 app.UseRateLimiter();                       // after tenancy: partitions by tenant + user
 app.UseAuthorization();
-app.UseFastEndpoints(config =>
-{
-    config.Endpoints.RoutePrefix = "api";
-    config.Versioning.Prefix = "v";
-    config.Versioning.PrependToRoute = true;
-    config.Versioning.DefaultVersion = 1;
-});
+app.UseFastEndpoints(ApiConventions.Apply); // /api/v{n}/..., shared JSON, problem-details validation errors
 if (app.Environment.IsDevelopment())
 {
-    app.UseSwaggerGen();
+    app.UseSwaggerGen();                    // contract: /swagger/v1/swagger.json, UI: /swagger
 }
 
 app.MapDefaultEndpoints();                  // /health/live, /health/ready, /metrics (anonymous)

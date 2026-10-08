@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
+using ModularMonolith.Shared.Infrastructure.Web;
 
 namespace ModularMonolith.Shared.Infrastructure.Tenancy;
 
@@ -63,5 +64,5 @@ internal sealed class TenantResolutionMiddleware(RequestDelegate next)
     }
 
     private static Task ForbidAsync(HttpContext context, string detail)
-        => Results.Problem(statusCode: StatusCodes.Status403Forbidden, title: "Forbidden", detail: detail).ExecuteAsync(context);
+        => ProblemResponses.WriteAsync(context, StatusCodes.Status403Forbidden, "The tenant could not be resolved.", detail);
 }

@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Options;
 using ModularMonolith.Shared.Infrastructure.Caching;
+using ModularMonolith.Shared.Infrastructure.Configuration;
 using ModularMonolith.Shared.Infrastructure.Cqrs;
 using ModularMonolith.Shared.Infrastructure.Data;
 using ModularMonolith.Shared.Infrastructure.Health;
@@ -31,9 +32,6 @@ namespace ModularMonolith.Shared.Infrastructure;
 /// </summary>
 public static class SharedInfrastructureExtensions
 {
-    /// <summary>The Valkey connection string name (<c>ConnectionStrings:cache</c>).</summary>
-    public const string CacheConnectionName = "cache";
-
     /// <summary>
     /// Registers all building blocks and every module. This is the only place modules are wired in.
     /// </summary>
@@ -52,10 +50,12 @@ public static class SharedInfrastructureExtensions
         services.TryAddSingleton(TimeProvider.System);
         services.AddHttpContextAccessor();
 
-        services.Configure<DatabaseOptions>(configuration.GetSection(DatabaseOptions.SectionName));
-        services.Configure<TenancyOptions>(configuration.GetSection(TenancyOptions.SectionName));
-        services.Configure<OutboxOptions>(configuration.GetSection(OutboxOptions.SectionName));
-        services.Configure<Localization.LocalizationOptions>(configuration.GetSection(Localization.LocalizationOptions.SectionName));
+        // Strongly typed, validated configuration: the host refuses to start on invalid settings.
+        services.AddValidatedOptions<DatabaseOptions, DatabaseOptionsValidator>(configuration, DatabaseOptions.SectionName);
+        services.AddValidatedOptions<CacheOptions, CacheOptionsValidator>(configuration, CacheOptions.SectionName);
+        services.AddValidatedOptions<TenancyOptions, TenancyOptionsValidator>(configuration, TenancyOptions.SectionName);
+        services.AddValidatedOptions<OutboxOptions, OutboxOptionsValidator>(configuration, OutboxOptions.SectionName);
+        services.AddValidatedOptions<Localization.LocalizationOptions, LocalizationOptionsValidator>(configuration, Localization.LocalizationOptions.SectionName);
 
         AddData(services, configuration);
         AddMessaging(services);
@@ -172,10 +172,11 @@ public static class SharedInfrastructureExtensions
 
     private static void AddCaching(IServiceCollection services, IConfiguration configuration)
     {
-        services.AddSingleton<IConnectionMultiplexer>(_ =>
+        services.AddSingleton<IConnectionMultiplexer>(provider =>
         {
-            var connectionString = configuration.GetConnectionString(CacheConnectionName)
-                ?? throw new InvalidOperationException($"Connection string '{CacheConnectionName}' is not configured.");
+            var name = provider.GetRequiredService<IOptions<CacheOptions>>().Value.ConnectionStringName;
+            var connectionString = configuration.GetConnectionString(name)
+                ?? throw new InvalidOperationException($"Connection string '{name}' is not configured.");
             var options = ConfigurationOptions.Parse(connectionString);
             options.AbortOnConnectFail = false; // start even if Valkey is down; the cache fails open
             return ConnectionMultiplexer.Connect(options);

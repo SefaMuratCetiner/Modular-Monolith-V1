@@ -5,6 +5,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ModularMonolith.Shared.Infrastructure.Observability;
+using ModularMonolith.Shared.Infrastructure.Serialization;
+using ModularMonolith.Shared.Infrastructure.Web;
 using ModularMonolith.Shared.Kernel.Context;
 using StackExchange.Redis;
 
@@ -30,7 +32,6 @@ public sealed class IdempotencyPreProcessor<TRequest> : IPreProcessor<TRequest>
 
     private const int MaxKeyLength = 100;
 
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     /// <inheritdoc />
     public async Task PreProcessAsync(IPreProcessorContext<TRequest> context, CancellationToken ct)
@@ -50,7 +51,7 @@ public sealed class IdempotencyPreProcessor<TRequest> : IPreProcessor<TRequest>
 
         if (key.Length > MaxKeyLength)
         {
-            await WriteProblemAsync(http, StatusCodes.Status400BadRequest, $"The {HeaderName} header must be at most {MaxKeyLength} characters.");
+            await ProblemResponses.WriteAsync(http, StatusCodes.Status400BadRequest, "The idempotency key is invalid.", $"The {HeaderName} header must be at most {MaxKeyLength} characters.");
             return;
         }
 
@@ -58,7 +59,7 @@ public sealed class IdempotencyPreProcessor<TRequest> : IPreProcessor<TRequest>
         var tenant = services.GetRequiredService<ITenantContext>();
         var user = services.GetRequiredService<ICurrentUser>();
         var scopedKey = $"idempotency:{(tenant.IsResolved ? tenant.TenantId : "-")}:{user.AuditId}:{http.Request.Method}:{http.Request.Path}:{key}";
-        var fingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(context.Request, JsonOptions)));
+        var fingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(context.Request, JsonDefaults.Options)));
 
         IdempotencyBeginResult begin;
         try
@@ -83,16 +84,13 @@ public sealed class IdempotencyPreProcessor<TRequest> : IPreProcessor<TRequest>
                 await http.Response.WriteAsync(begin.Body ?? string.Empty, ct);
                 break;
             case IdempotencyState.InProgress:
-                await WriteProblemAsync(http, StatusCodes.Status409Conflict, "A request with this idempotency key is still being processed.");
+                await ProblemResponses.WriteAsync(http, StatusCodes.Status409Conflict, "The request is already being processed.", "A request with this idempotency key is still being processed.");
                 break;
             case IdempotencyState.Mismatch:
-                await WriteProblemAsync(http, StatusCodes.Status422UnprocessableEntity, "The idempotency key was already used with a different request payload.");
+                await ProblemResponses.WriteAsync(http, StatusCodes.Status422UnprocessableEntity, "The idempotency key was reused.", "The idempotency key was already used with a different request payload.");
                 break;
             default:
                 throw new InvalidOperationException($"Unknown idempotency state {begin.State}.");
         }
     }
-
-    private static Task WriteProblemAsync(HttpContext http, int statusCode, string detail)
-        => Results.Problem(statusCode: statusCode, title: "Idempotency", detail: detail).ExecuteAsync(http);
 }

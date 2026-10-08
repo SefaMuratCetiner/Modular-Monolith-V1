@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ModularMonolith.Shared.Infrastructure.Modules;
+using ModularMonolith.Shared.Infrastructure.Serialization;
 using ModularMonolith.Shared.Kernel.Messaging;
 
 namespace ModularMonolith.Shared.Infrastructure.Messaging;
@@ -10,8 +11,6 @@ namespace ModularMonolith.Shared.Infrastructure.Messaging;
 /// </summary>
 public sealed class IntegrationEventRegistry
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
     private readonly Dictionary<string, Type> _typesByName;
 
     /// <summary>Initializes a new instance of the <see cref="IntegrationEventRegistry"/> class.</summary>
@@ -40,7 +39,7 @@ public sealed class IntegrationEventRegistry
     public static string Serialize(IIntegrationEvent integrationEvent)
     {
         ArgumentNullException.ThrowIfNull(integrationEvent);
-        return JsonSerializer.Serialize(integrationEvent, integrationEvent.GetType(), JsonOptions);
+        return JsonSerializer.Serialize(integrationEvent, integrationEvent.GetType(), JsonDefaults.Options);
     }
 
     /// <summary>Deserializes an outbox payload into its integration event type.</summary>
@@ -54,7 +53,7 @@ public sealed class IntegrationEventRegistry
             throw new InvalidOperationException($"Unknown integration event type '{name}'.");
         }
 
-        return (IIntegrationEvent?)JsonSerializer.Deserialize(payload, type, JsonOptions)
+        return (IIntegrationEvent?)JsonSerializer.Deserialize(payload, type, JsonDefaults.Options)
             ?? throw new InvalidOperationException($"Payload for '{name}' deserialized to null.");
     }
 }

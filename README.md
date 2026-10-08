@@ -11,8 +11,6 @@ A .NET 10 **modular monolith** template using **vertical slices** inside each mo
 
 Every dependency is free and open source (see [Third-party licenses](#third-party-licenses)).
 
-> This is a rewrite of `Modular Monolith 1`. The [Fixes vs. the reference](#fixes-vs-the-reference) table maps every review finding to its fix.
-
 ---
 
 ## Quickstart
@@ -40,7 +38,7 @@ docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.ym
 | Endpoint | Aspire | Compose |
 |---|---|---|
 | API | `http://localhost:5080` | `http://localhost:8081` |
-| Swagger (Development) | `/swagger` | `/swagger` |
+| Swagger UI / OpenAPI contract (Development) | `/swagger`, `/swagger/v1/swagger.json` | same |
 | Aspire dashboard | `https://localhost:15888` | n/a |
 | Keycloak | `http://localhost:8080` | `http://localhost:8080` |
 | Grafana / Prometheus / Loki / Tempo | see the Aspire dashboard | `:3000` / `:9090` / `:3100` / `:3200` |
@@ -106,7 +104,9 @@ flowchart LR
 ### Request flow for a command
 
 ```
-HTTP -> Endpoint (FastEndpoints)                 thin adapter, Result -> RFC 9457 problem details
+HTTP -> HTTP platform                            forwarded headers, HTTPS/HSTS, security headers, compression
+     -> Authentication -> tenant -> timeout -> rate limit -> authorization
+     -> Endpoint (FastEndpoints)                 thin adapter, Result -> RFC 9457 problem details
      -> IdempotencyPreProcessor                  optional Idempotency-Key (Valkey, tenant+user scoped)
      -> LoggingCommandDecorator
      -> TelemetryCommandDecorator                span + duration histogram
@@ -142,16 +142,20 @@ ModularMonolithV1/
     │   └── ModularMonolith.ServiceDefaults/    # OTel, health endpoints, resilience
     ├── Host/ModularMonolith.Host/
     │   ├── Program.cs                          # composition root (module list lives here)
-    │   ├── Configuration/                      # Logging, Security, BackgroundJobs
+    │   ├── Configuration/                      # HttpPlatform, Security, Logging, BackgroundJobs, ApiConventions,
+    │   │                                       # SecurityHeadersMiddleware, *Options + *OptionsValidator
     │   └── appsettings*.json  ModularMonolith.Host.http
     ├── Shared/
     │   ├── ModularMonolith.Shared.Kernel/      # pure building blocks
     │   │   ├── Domain/      Entity, AggregateRoot, IDomainEvent, IAuditable, ISoftDeletable
     │   │   ├── Results/     Result, Result<T>, Error, ValidationError, ErrorType
+    │   │   ├── Paging/      PageRequest (validated), PagedResult<T>
     │   │   ├── Cqrs/        ICommand, IQuery, I*Handler, IDomainEventHandler
     │   │   ├── Messaging/   IIntegrationEvent, IIntegrationEventHandler, IOutbox
     │   │   └── Context/     ITenantContext, ICurrentUser
     │   └── ModularMonolith.Shared.Infrastructure/
+    │       ├── Configuration/  AddValidatedOptions (bind + IValidateOptions + ValidateOnStart)
+    │       ├── Serialization/  JsonDefaults (the single JSON convention)
     │       ├── Modules/        IModule, ModuleCatalog
     │       ├── Data/           DbSession (IDbSession + IUnitOfWork), SqlIdentifier, DatabaseOptions
     │       ├── Migrations/     ModuleMigrator (DbUp per module, advisory lock, grants)
@@ -159,12 +163,12 @@ ModularMonolithV1/
     │       ├── Messaging/      Outbox, OutboxProcessor, InProcessEventBus, Inbox decorator, registry
     │       ├── Tenancy/        TenantContext, TenantResolutionMiddleware, TenancyOptions
     │       ├── Security/       HttpCurrentUser
-    │       ├── Caching/        ICacheStore, ValkeyCacheStore
+    │       ├── Caching/        ICacheStore (keys + versioned regions), ValkeyCacheStore, CacheOptions
     │       ├── Idempotency/    FastEndpoints pre/post processors, Valkey store
     │       ├── Localization/   JSON IStringLocalizer per module assembly
     │       ├── Health/         PostgreSQL, Valkey checks
     │       ├── Observability/  ActivitySource/Meter, source-generated log messages
-    │       └── Web/            Result -> ProblemDetails, exception handler, rate-limit names
+    │       └── Web/            Result -> ProblemDetails, ProblemResponses, PagingRequest, OpenAPI helpers
     └── Modules/
         ├── Catalog/
         │   ├── ModularMonolith.Catalog.Contracts/   ProductCreatedIntegrationEvent
@@ -174,7 +178,8 @@ ModularMonolithV1/
         │       ├── Domain/          Product, Money, ProductCreatedDomainEvent, CatalogErrors
         │       ├── Features/
         │       │   ├── CreateProduct/   Endpoint, Command, Handler, Validator, PublishProductCreated
-        │       │   ├── ListProducts/    Endpoint, Query (+ read model), Handler (cached)
+        │       │   ├── GetProduct/      Endpoint, Query (+ read model), Handler (target of 201 Location)
+        │       │   ├── ListProducts/    Endpoint, Query (+ read model), Handler (paged, cached per page)
         │       │   ├── GetProductPrice/ Endpoint, Query, Handler (currency conversion)
         │       │   └── SyncSeller/      UserRegisteredHandler (consumes Identity's event)
         │       ├── Infrastructure/  ProductRepository, ExchangeRates/ (Refit + ACL), Migrations/001_catalog.sql
@@ -276,12 +281,16 @@ internal sealed class CreateProductEndpoint(ICommandHandler<CreateProductCommand
         Options(b => b.WithTags("Catalog").RequireRateLimiting(RateLimitPolicies.PerUser));
         PreProcessor<IdempotencyPreProcessor<CreateProductRequest>>();                         // Idempotency-Key
         PostProcessor<IdempotencyPostProcessor<CreateProductRequest, CreateProductResponse>>();
+        Description(b => b                           // OpenAPI: every success and problem response is documented
+            .Produces<CreateProductResponse>(StatusCodes.Status201Created)
+            .ProducesProblems(400, 403, 409, 422, 503), clearDefaults: true);   // + 401 and 429 automatically
     }
 
     public override async Task HandleAsync(CreateProductRequest req, CancellationToken ct)
     {
         var result = await handler.HandleAsync(new CreateProductCommand(req.Name, req.Sku, req.Price, req.Currency), ct);
         if (result.IsFailure) { await Send.ResultAsync(result.Error.ToProblem()); return; }   // RFC 9457
+        HttpContext.Response.Headers.Location = GetProductEndpoint.LocationFor(result.Value);  // /api/v1/catalog/products/{id}
         await Send.ResponseAsync(new CreateProductResponse(result.Value), StatusCodes.Status201Created, ct);
     }
 }
@@ -434,7 +443,44 @@ create policy tenant_isolation on catalog.products
 - **Secrets:**
   - Aspire uses secret parameters.
   - Compose uses `deploy/.env`, which is git-ignored.
-  - No credentials are committed apart from the dev realm's demo users.
+  - Only local-development defaults are committed (`appsettings.Development.json`, dev realm demo users).
+
+---
+
+## API conventions
+
+| Concern | Convention |
+|---|---|
+| Routes and versioning | `/api/v{n}/<module>/<resource>` (FastEndpoints versioning, nouns only) |
+| JSON | One configuration (`JsonDefaults`) for HTTP, outbox, cache and idempotency: camelCase, enums as camelCase strings, strict numbers, nulls written explicitly |
+| Errors | Always RFC 9457 problem details with `traceId`; human-readable `title`, occurrence-specific `detail`, stable `code` extension. This covers `Result` errors, binding and validation errors, 401, 403, 404, 405, 413, 429 and 504 |
+| Validation | 400 with `errors: { field: [messages] }`, the same shape for request binding errors and command validation |
+| Status codes | 200, 201 (+ `Location` of the new resource), 400, 401, 403, 404, 409, 413, 422 (idempotency key reuse), 429 (+ `Retry-After`), 503 (feature disabled / dependency down), 504 (timeout) |
+| Lists | Always paged: `?page=1&pageSize=20` (max 100), response `{ items, page, pageSize, totalCount, totalPages, hasNextPage, hasPreviousPage }`, deterministic ordering |
+| Limits | Request timeout `Http:RequestTimeoutSeconds` (504), body size `Http:MaxRequestBodyBytes` (413), rate limit per tenant + user (429) |
+| Idempotency | Optional `Idempotency-Key` header on POST |
+| OpenAPI | Every endpoint documents its success and problem responses; the contract is served in Development at `/swagger/v1/swagger.json` (Swagger UI is never exposed outside Development) |
+| Transport | Outside Development: HTTPS redirection (308) and HSTS, except `/health/*` and `/metrics`; `X-Forwarded-*` honoured only from `ReverseProxy:KnownProxies` / `KnownNetworks`; secure-only cookies |
+| Headers | `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `Cross-Origin-Opener-Policy`, and a CSP (locked down for JSON, relaxed only for the Hangfire and Swagger UIs); no `Server` header; Brotli/gzip compression |
+
+## Configuration
+
+Every section is a strongly typed options class with an `IValidateOptions<T>` validator and `ValidateOnStart()`, so the host refuses to start on missing or invalid settings and lists every problem.
+
+| Section | Validated rules |
+|---|---|
+| `ConnectionStrings:postgres`, `ConnectionStrings:cache` | Must be present (names configurable in `Database` / `Cache`) |
+| `Database` | Connection string name set; `ApplicationRole` is a lowercase SQL identifier |
+| `Authentication` | `Authority` is an absolute URL, https unless `RequireHttpsMetadata=false` (development only); audience and web client id set |
+| `Tenancy` | Claim type set; valid default tenant when the fallback is enabled; `RootDomain` is a host name |
+| `Outbox` | Batch size, batches per run, attempts and delays within range; cron has 5 or 6 fields |
+| `Localization` | At least one known culture |
+| `RateLimiting` | Permit limit and window within range |
+| `Http` | Timeout, body size, HTTPS port and HSTS max-age within range |
+| `ReverseProxy` | Proxies are IP addresses, networks are CIDR ranges, forward limit 1–10 |
+| `Modules:Catalog`, `Modules:Identity` | Cache TTLs within range; URLs are absolute http(s) |
+
+Behind a TLS-terminating load balancer or ingress, set `ReverseProxy__KnownNetworks__0=<ingress CIDR>` so the client IP (rate limiting, audit) and the https scheme are taken from `X-Forwarded-*`.
 
 ---
 
@@ -443,7 +489,7 @@ create policy tenant_isolation on catalog.products
 ### … a slice to an existing module
 
 1. Create `Features/<UseCase>/`.
-2. Add a `…Command : ICommand<T>` or `…Query : IQuery<T>`, a handler, an optional `AbstractValidator<…>`, and a FastEndpoints endpoint with slice-local request and response records.
+2. Add a `…Command : ICommand<T>` or `…Query : IQuery<T>`, a handler, an optional `AbstractValidator<…>`, and a FastEndpoints endpoint with slice-local request and response records. List queries take a `PageRequest` and return `PagedResult<T>`; endpoints document their responses with `Description(... .ProducesProblems(...), clearDefaults: true)`.
 3. That's all. Handlers and validators are picked up by assembly scanning and wrapped by the decorator chain automatically.
 
 ### … a module
@@ -489,51 +535,3 @@ All free for commercial use. There are no paid tiers and no commercial-licensed 
 | Keycloak | Apache-2.0 |
 | Prometheus | Apache-2.0 |
 | Grafana, Loki, Tempo (self-hosted OSS) | AGPL-3.0 |
-
----
-
-## Fixes vs. the reference
-
-| # | Finding in `Modular Monolith 1` | Fix in V1 |
-|---|---|---|
-| 1 | Not real vertical slice: each feature spread over four layer projects | One project per module with `Features/<UseCase>/` folders; the Domain and Infrastructure folders are inside the module |
-| 2 | Boundaries by convention only: all types public, one shared Contracts project | Everything `internal` except `IModule`; per-module `*.Contracts`; modules reference only others' contracts |
-| 3 | Tenant schemas never migrated; tables hard-coded to `public` | Schema per **module** with `tenant_id` + **RLS**; one migration run covers all tenants |
-| 4 | Schema-name collisions (`Acme-Corp` = `acme_corp`, empty name = `public`) | No tenant schemas; tenant ids are validated (`^[a-z0-9][a-z0-9-]{0,62}$`) and an empty tenant is rejected by a CHECK constraint |
-| 5 | Outbox drained only the default tenant (Hangfire has no HttpContext) | Outbox has no RLS and carries `tenant_id`; consumers run in a scope bound to the message tenant |
-| 6 | Outbox unsafe with 2 replicas; unbounded retries | `FOR UPDATE SKIP LOCKED`, exponential backoff, dead-letter status, advisory-locked migrations |
-| 7 | Cross-module events never fired: no consumers, no domain→integration mapping | In-transaction domain-event handlers map to integration events; Catalog consumes `UserRegisteredIntegrationEvent` |
-| 8 | Duplicate deliveries not handled | Per-module inbox `(message_id, handler)` decorator |
-| 9 | Audit best-effort, outside the transaction | `AuditWriter` runs inside the command transaction |
-| 10 | Repository owned the transaction; no unit of work | Scoped `DbSession` / `IUnitOfWork` owned by the pipeline; repositories just join it |
-| 11 | `HttpContext` used inside repositories | `ICurrentUser` / `ITenantContext` abstractions; `TimeProvider` for time |
-| 12 | Cookie/OIDC as the default for an API (302 redirects) | JWT bearer for `/api` (401), cookie+OIDC only for browsers |
-| 13 | Tenant taken from client-controlled Host header | Tenant from the token claim only; subdomain is just a cross-check |
-| 14 | Domain had no invariants (validation only in FluentValidation) | Aggregates validate in factories (`Result<T>`); validators are a fast first line |
-| 15 | Exceptions for business failures (`InvalidOperationException` for a feature flag) | `Result`/`Error` mapped to RFC 9457 (400/403/404/409/503) |
-| 16 | Idempotency hand-written in one endpoint, key not scoped | Reusable FastEndpoints pre/post processors; key scoped by tenant, user, method and route; released on failure |
-| 17 | Global rate limit shared by everyone | Fixed window partitioned per tenant + user |
-| 18 | Duplicate metrics (prometheus-net + OTel); OTLP metrics/logs sent to Tempo | One OTel metrics pipeline on `/metrics`; traces only to Tempo; Serilog for logs |
-| 19 | `dynamic` dispatch and `AssemblyQualifiedName` type loading in the outbox | Cached generic delegates; type registry limited to Contracts assemblies |
-| 20 | Unused Refit clients | Exchange rates power `GetProductPrice` (behind an ACL with caching); Keycloak client powers a readiness check |
-| 21 | Asp.Versioning registered but not used by FastEndpoints | FastEndpoints native versioning (`/api/v1/...`) |
-| 22 | `:latest` images, hard-coded admin passwords, wrong bind-mount paths in AppHost | Pinned image tags, Aspire secret parameters / `.env`, corrected relative paths |
-| 23 | Redis licence and commercial-package risk | Valkey; only free / OSS packages; vulnerable transitive packages pinned |
-| 24 | No central package management, inconsistent build settings | CPM, explicit TFM/LangVersion per project, `latest-recommended` analyzers + Meziantou, `.editorconfig` |
-
-## What still needs a runtime check
-
-The solution is verified to **build** (`dotnet build ModularMonolith.slnx`, 0 warnings). It hasn't been run yet. Check these first when you start it:
-
-- FastEndpoints discovers the `internal` endpoint classes. If not, make only the endpoint classes `public`.
-- The Keycloak 26 realm import: the user-profile `tenant_id` attribute, the mappers, and the `sub` claim in access tokens.
-- Aspire: the Prometheus container reaching `host.docker.internal:5080`, and the Grafana datasources resolving `tempo`, `loki` and `prometheus` by container name.
-- Compose: the Keycloak `--hostname`/`--hostname-backchannel-dynamic` settings, so the token issuer matches inside the API container.
-
-There are no test projects yet. Good first candidates:
-- Aggregate invariants
-- Decorator order and transaction behaviour
-- Outbox retry and dead-letter (`FakeTimeProvider`)
-- Tenant resolver rules
-- Testcontainers integration tests proving RLS isolation and outbox → inbox delivery
-- NetArchTest rules for the dependency table above

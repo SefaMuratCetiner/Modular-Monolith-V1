@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ModularMonolith.Shared.Infrastructure.Serialization;
 using StackExchange.Redis;
 
 namespace ModularMonolith.Shared.Infrastructure.Idempotency;
@@ -11,12 +12,11 @@ internal sealed class IdempotencyStore(IConnectionMultiplexer connection)
 {
     private static readonly TimeSpan InFlightExpiry = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan CompletedExpiry = TimeSpan.FromHours(24);
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public async Task<IdempotencyBeginResult> BeginAsync(string key, string fingerprint)
     {
         var database = connection.GetDatabase();
-        var inFlight = JsonSerializer.Serialize(new IdempotencyRecord(fingerprint, null, null), JsonOptions);
+        var inFlight = JsonSerializer.Serialize(new IdempotencyRecord(fingerprint, null, null), JsonDefaults.Options);
 
         // Two attempts handle the race where the existing key expires between SET NX and GET.
         for (var attempt = 0; attempt < 2; attempt++)
@@ -32,7 +32,7 @@ internal sealed class IdempotencyStore(IConnectionMultiplexer connection)
                 continue;
             }
 
-            var record = JsonSerializer.Deserialize<IdempotencyRecord>(existing.ToString(), JsonOptions);
+            var record = JsonSerializer.Deserialize<IdempotencyRecord>(existing.ToString(), JsonDefaults.Options);
             if (record is null || !string.Equals(record.Fingerprint, fingerprint, StringComparison.Ordinal))
             {
                 return IdempotencyBeginResult.Mismatch;
@@ -49,7 +49,7 @@ internal sealed class IdempotencyStore(IConnectionMultiplexer connection)
     public Task CompleteAsync(string key, string fingerprint, int statusCode, string body)
         => connection.GetDatabase().StringSetAsync(
             key,
-            JsonSerializer.Serialize(new IdempotencyRecord(fingerprint, statusCode, body), JsonOptions),
+            JsonSerializer.Serialize(new IdempotencyRecord(fingerprint, statusCode, body), JsonDefaults.Options),
             CompletedExpiry);
 
     public Task ReleaseAsync(string key) => connection.GetDatabase().KeyDeleteAsync(key);

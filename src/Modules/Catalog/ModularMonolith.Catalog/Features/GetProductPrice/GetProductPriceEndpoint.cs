@@ -15,6 +15,11 @@ internal sealed class GetProductPriceEndpoint(IQueryHandler<GetProductPriceQuery
         Get("catalog/products/{id:guid}/price");
         Version(1);
         Options(builder => builder.WithTags("Catalog").RequireRateLimiting(RateLimitPolicies.PerUser));
+        Description(
+            builder => builder
+                .Produces<ProductPrice>(StatusCodes.Status200OK)
+                .ProducesProblems(StatusCodes.Status403Forbidden, StatusCodes.Status404NotFound, StatusCodes.Status503ServiceUnavailable),
+            clearDefaults: true);
         Summary(summary => summary.Summary = "Gets a product price, optionally converted to another currency.");
     }
 

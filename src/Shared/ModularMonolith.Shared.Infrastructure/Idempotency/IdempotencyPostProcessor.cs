@@ -3,6 +3,7 @@ using FastEndpoints;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ModularMonolith.Shared.Infrastructure.Observability;
+using ModularMonolith.Shared.Infrastructure.Serialization;
 using StackExchange.Redis;
 
 namespace ModularMonolith.Shared.Infrastructure.Idempotency;
@@ -15,8 +16,6 @@ namespace ModularMonolith.Shared.Infrastructure.Idempotency;
 /// <typeparam name="TResponse">The endpoint response type.</typeparam>
 public sealed class IdempotencyPostProcessor<TRequest, TResponse> : IPostProcessor<TRequest, TResponse>
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
     /// <inheritdoc />
     public async Task PostProcessAsync(IPostProcessorContext<TRequest, TResponse> context, CancellationToken ct)
     {
@@ -34,7 +33,7 @@ public sealed class IdempotencyPostProcessor<TRequest, TResponse> : IPostProcess
             var status = http.Response.StatusCode;
             if (!context.HasExceptionOccurred && status is >= 200 and < 300 && context.Response is not null)
             {
-                await store.CompleteAsync(claim.Key, claim.Fingerprint, status, JsonSerializer.Serialize(context.Response, JsonOptions));
+                await store.CompleteAsync(claim.Key, claim.Fingerprint, status, JsonSerializer.Serialize(context.Response, JsonDefaults.Options));
             }
             else
             {

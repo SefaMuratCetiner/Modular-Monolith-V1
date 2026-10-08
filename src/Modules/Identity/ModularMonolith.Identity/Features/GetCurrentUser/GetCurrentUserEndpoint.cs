@@ -18,6 +18,11 @@ internal sealed class GetCurrentUserEndpoint(
         Get("identity/users/me");
         Version(1);
         Options(builder => builder.WithTags("Identity").RequireRateLimiting(RateLimitPolicies.PerUser));
+        Description(
+            builder => builder
+                .Produces<UserProfileView>(StatusCodes.Status200OK)
+                .ProducesProblems(StatusCodes.Status403Forbidden, StatusCodes.Status404NotFound),
+            clearDefaults: true);
         Summary(summary => summary.Summary = "Gets the authenticated user's profile.");
     }
 
