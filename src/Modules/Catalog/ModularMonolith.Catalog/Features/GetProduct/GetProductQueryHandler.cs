@@ -15,12 +15,13 @@ internal sealed class GetProductQueryHandler(IDbSession session) : IQueryHandler
         var product = await connection.QuerySingleOrDefaultAsync<ProductDetails>(new CommandDefinition(
             """
             select p.id as Id, p.name as Name, p.sku as Sku, p.price as Price, p.currency as Currency,
-                   p.seller_id as SellerId, s.display_name as SellerName
+                   p.seller_id as SellerId, s.display_name as SellerName,
+                   p.version as Version, p.created_at as CreatedAt, p.modified_at as ModifiedAt
             from catalog.products p
             left join catalog.sellers s on s.subject_id = p.seller_id
             where p.id = @Id and not p.is_deleted
             """,
-            new { Id = query.ProductId },
+            new { Id = query.ProductId.Value },
             cancellationToken: cancellationToken));
 
         return product is null

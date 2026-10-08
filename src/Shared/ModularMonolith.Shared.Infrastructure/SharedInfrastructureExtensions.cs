@@ -23,7 +23,6 @@ using ModularMonolith.Shared.Infrastructure.Web;
 using ModularMonolith.Shared.Kernel.Context;
 using ModularMonolith.Shared.Kernel.Messaging;
 using Npgsql;
-using StackExchange.Redis;
 
 namespace ModularMonolith.Shared.Infrastructure;
 
@@ -55,11 +54,12 @@ public static class SharedInfrastructureExtensions
         services.AddValidatedOptions<CacheOptions, CacheOptionsValidator>(configuration, CacheOptions.SectionName);
         services.AddValidatedOptions<TenancyOptions, TenancyOptionsValidator>(configuration, TenancyOptions.SectionName);
         services.AddValidatedOptions<OutboxOptions, OutboxOptionsValidator>(configuration, OutboxOptions.SectionName);
+        services.AddValidatedOptions<RetentionOptions, RetentionOptionsValidator>(configuration, RetentionOptions.SectionName);
         services.AddValidatedOptions<Localization.LocalizationOptions, LocalizationOptionsValidator>(configuration, Localization.LocalizationOptions.SectionName);
 
         AddData(services, configuration);
         AddMessaging(services);
-        AddCaching(services, configuration);
+        AddCaching(services);
 
         // Context
         services.AddScoped<TenantContext>();
@@ -129,12 +129,17 @@ public static class SharedInfrastructureExtensions
     public static async Task InitializeModulesAsync(this IServiceProvider services, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(services);
+
+        // Connect to Valkey asynchronously before any request can need it (never sync-over-async later).
+        await services.GetRequiredService<ValkeyConnection>().ConnectAsync(cancellationToken);
+
         if (services.GetRequiredService<IOptions<DatabaseOptions>>().Value.MigrateOnStartup)
         {
             await services.GetRequiredService<ModuleMigrator>().MigrateAsync(cancellationToken);
         }
 
         var sweepCron = services.GetRequiredService<IOptions<OutboxOptions>>().Value.SweepCron;
+        var retentionCron = services.GetRequiredService<IOptions<RetentionOptions>>().Value.Cron;
         var jobs = services.GetRequiredService<IRecurringJobManager>();
         foreach (var module in services.GetRequiredService<ModuleCatalog>().Modules)
         {
@@ -143,11 +148,16 @@ public static class SharedInfrastructureExtensions
                 $"outbox-{schema}",
                 processor => processor.ProcessAsync(schema, CancellationToken.None),
                 sweepCron);
+            jobs.AddOrUpdate<RetentionJob>(
+                $"retention-{schema}",
+                job => job.PurgeAsync(schema, CancellationToken.None),
+                retentionCron);
         }
     }
 
     private static void AddData(IServiceCollection services, IConfiguration configuration)
     {
+        DapperTypeHandlers.Register();
         services.AddSingleton(provider =>
         {
             var name = provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.ConnectionStringName;
@@ -165,22 +175,19 @@ public static class SharedInfrastructureExtensions
     {
         services.AddSingleton<IntegrationEventRegistry>();
         services.AddSingleton<InProcessEventBus>();
-        services.AddScoped<OutboxDispatchTrigger>();
+        services.AddSingleton<OutboxSignal>();
         services.AddScoped<IOutbox, Outbox>();
         services.AddTransient<OutboxProcessor>();
+        services.AddTransient<RetentionJob>();
+        services.AddSingleton<OutboxAdministration>();
+        services.AddHostedService<OutboxDispatcherService>();
+        services.AddHostedService<OutboxMetricsCollector>();
     }
 
-    private static void AddCaching(IServiceCollection services, IConfiguration configuration)
+    private static void AddCaching(IServiceCollection services)
     {
-        services.AddSingleton<IConnectionMultiplexer>(provider =>
-        {
-            var name = provider.GetRequiredService<IOptions<CacheOptions>>().Value.ConnectionStringName;
-            var connectionString = configuration.GetConnectionString(name)
-                ?? throw new InvalidOperationException($"Connection string '{name}' is not configured.");
-            var options = ConfigurationOptions.Parse(connectionString);
-            options.AbortOnConnectFail = false; // start even if Valkey is down; the cache fails open
-            return ConnectionMultiplexer.Connect(options);
-        });
+        services.AddSingleton<ValkeyConnection>();
+        services.AddSingleton<CacheKeyFactory>();
         services.AddScoped<ICacheStore, ValkeyCacheStore>();
         services.AddSingleton<IdempotencyStore>();
     }

@@ -13,7 +13,11 @@
       },
       {
         "name": "admin",
-        "description": "Tenant administrator (Hangfire dashboard, user list)"
+        "description": "Tenant administrator (user list of the own tenant)"
+      },
+      {
+        "name": "operator",
+        "description": "Platform operator: cross-tenant tools (Hangfire dashboard, outbox dead-letter replay)"
       }
     ]
   },
@@ -179,7 +183,8 @@
       ],
       "realmRoles": [
         "user",
-        "admin"
+        "admin",
+        "operator"
       ]
     },
     {

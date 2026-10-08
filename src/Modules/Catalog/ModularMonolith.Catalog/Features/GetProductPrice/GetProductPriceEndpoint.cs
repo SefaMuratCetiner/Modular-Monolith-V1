@@ -1,6 +1,7 @@
 using FastEndpoints;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using ModularMonolith.Catalog.Domain;
 using ModularMonolith.Shared.Infrastructure.Web;
 using ModularMonolith.Shared.Kernel.Cqrs;
 
@@ -25,7 +26,7 @@ internal sealed class GetProductPriceEndpoint(IQueryHandler<GetProductPriceQuery
 
     public override async Task HandleAsync(GetProductPriceRequest req, CancellationToken ct)
     {
-        var result = await handler.HandleAsync(new GetProductPriceQuery(req.Id, req.Currency), ct);
+        var result = await handler.HandleAsync(new GetProductPriceQuery(new ProductId(req.Id), req.Currency), ct);
         if (result.IsFailure)
         {
             await Send.ResultAsync(result.Error.ToProblem());

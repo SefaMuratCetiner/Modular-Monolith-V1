@@ -18,6 +18,7 @@ internal sealed class DbSession(
 {
     private readonly List<IHasDomainEvents> _trackedAggregates = [];
     private readonly List<Func<CancellationToken, Task>> _afterCommit = [];
+    private readonly List<AuditChange> _changes = [];
     private NpgsqlConnection? _connection;
 
     /// <inheritdoc />
@@ -26,8 +27,17 @@ internal sealed class DbSession(
     /// <inheritdoc />
     public bool IsActive => Transaction is not null;
 
+    /// <summary>
+    /// Gets a value indicating whether COMMIT was sent for the current unit of work. After that point
+    /// a failure has an unknown outcome and must not be retried.
+    /// </summary>
+    public bool CommitStarted { get; private set; }
+
     /// <summary>Gets the aggregates tracked in the current unit of work.</summary>
     public IReadOnlyList<IHasDomainEvents> TrackedAggregates => _trackedAggregates;
+
+    /// <summary>Gets the before/after snapshots recorded in the current unit of work.</summary>
+    public IReadOnlyList<AuditChange> Changes => _changes;
 
     /// <inheritdoc />
     public async Task<NpgsqlConnection> GetConnectionAsync(CancellationToken cancellationToken)
@@ -72,6 +82,13 @@ internal sealed class DbSession(
     }
 
     /// <inheritdoc />
+    public void RecordChange(AuditChange change)
+    {
+        ArgumentNullException.ThrowIfNull(change);
+        _changes.Add(change);
+    }
+
+    /// <inheritdoc />
     public void OnCommitted(Func<CancellationToken, Task> callback)
     {
         ArgumentNullException.ThrowIfNull(callback);
@@ -90,6 +107,7 @@ internal sealed class DbSession(
 
         var connection = await GetConnectionAsync(cancellationToken);
         Transaction = await connection.BeginTransactionAsync(cancellationToken);
+        CommitStarted = false;
     }
 
     /// <summary>Commits the transaction and runs after-commit callbacks.</summary>
@@ -98,6 +116,7 @@ internal sealed class DbSession(
     public async Task CommitAsync(CancellationToken cancellationToken)
     {
         var transaction = Transaction ?? throw new InvalidOperationException("No active unit of work.");
+        CommitStarted = true;
         await transaction.CommitAsync(cancellationToken);
         await ResetTransactionAsync();
 
@@ -132,6 +151,12 @@ internal sealed class DbSession(
         {
             await Transaction.RollbackAsync(cancellationToken);
         }
+        catch (Exception exception) when (exception is NpgsqlException or InvalidOperationException)
+        {
+            // The connection broke (that is often why we are rolling back): the server has already
+            // discarded the transaction, so drop the connection and let the next use open a new one.
+            await DiscardConnectionAsync();
+        }
         finally
         {
             await ResetTransactionAsync();
@@ -153,6 +178,26 @@ internal sealed class DbSession(
         }
     }
 
+    /// <summary>
+    /// Disposes the current connection (and transaction) so the next operation opens a fresh one.
+    /// Used after transient failures, when the old connection may be unusable.
+    /// </summary>
+    /// <returns>A task.</returns>
+    public async Task DiscardConnectionAsync()
+    {
+        if (Transaction is not null)
+        {
+            await Transaction.DisposeAsync();
+            Transaction = null;
+        }
+
+        if (_connection is not null)
+        {
+            await _connection.DisposeAsync();
+            _connection = null;
+        }
+    }
+
     private async Task ResetTransactionAsync()
     {
         if (Transaction is not null)
@@ -162,5 +207,6 @@ internal sealed class DbSession(
         }
 
         _trackedAggregates.Clear();
+        _changes.Clear();
     }
 }

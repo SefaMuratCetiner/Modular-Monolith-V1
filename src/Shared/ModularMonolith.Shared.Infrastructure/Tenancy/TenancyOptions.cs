@@ -1,3 +1,5 @@
+using ModularMonolith.Shared.Infrastructure.Security;
+
 namespace ModularMonolith.Shared.Infrastructure.Tenancy;
 
 /// <summary>
@@ -9,7 +11,7 @@ public sealed class TenancyOptions
     public const string SectionName = "Tenancy";
 
     /// <summary>Gets or sets the token claim carrying the tenant identifier.</summary>
-    public string ClaimType { get; set; } = "tenant_id";
+    public string ClaimType { get; set; } = ClaimNames.TenantId;
 
     /// <summary>
     /// Gets or sets a value indicating whether requests without a tenant claim fall back to

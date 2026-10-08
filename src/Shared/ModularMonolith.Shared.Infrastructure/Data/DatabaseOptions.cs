@@ -19,6 +19,12 @@ public sealed class DatabaseOptions
     /// </summary>
     public string ApplicationRole { get; set; } = "modular_monolith_app";
 
+    /// <summary>
+    /// Gets or sets how many times a command is re-executed after a transient database failure
+    /// (connection loss, deadlock, serialization failure) that happened before commit.
+    /// </summary>
+    public int TransientRetries { get; set; } = 2;
+
     /// <summary>Gets or sets a value indicating whether migrations run at startup.</summary>
     public bool MigrateOnStartup { get; set; } = true;
 }

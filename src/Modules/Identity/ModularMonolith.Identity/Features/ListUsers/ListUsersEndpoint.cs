@@ -2,6 +2,7 @@ using FastEndpoints;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using ModularMonolith.Identity.Features.GetCurrentUser;
+using ModularMonolith.Shared.Infrastructure.Security;
 using ModularMonolith.Shared.Infrastructure.Web;
 using ModularMonolith.Shared.Kernel.Cqrs;
 using ModularMonolith.Shared.Kernel.Paging;
@@ -16,7 +17,7 @@ internal sealed class ListUsersEndpoint(IQueryHandler<ListUsersQuery, PagedResul
     {
         Get("identity/users");
         Version(1);
-        Roles("admin");
+        Roles(AppRoles.Admin);
         Options(builder => builder.WithTags("Identity").RequireRateLimiting(RateLimitPolicies.PerUser));
         Description(
             builder => builder

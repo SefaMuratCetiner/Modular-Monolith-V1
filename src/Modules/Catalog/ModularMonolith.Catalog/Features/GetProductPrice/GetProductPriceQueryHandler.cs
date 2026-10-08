@@ -19,7 +19,7 @@ internal sealed class GetProductPriceQueryHandler(
         var connection = await session.GetConnectionAsync(cancellationToken);
         var stored = await connection.QuerySingleOrDefaultAsync<StoredPrice>(new CommandDefinition(
             "select price as Amount, currency as Currency from catalog.products where id = @Id and not is_deleted",
-            new { Id = query.ProductId },
+            new { Id = query.ProductId.Value },
             cancellationToken: cancellationToken));
 
         if (stored is null)
@@ -30,7 +30,7 @@ internal sealed class GetProductPriceQueryHandler(
         var target = query.Currency?.Trim().ToUpperInvariant();
         if (string.IsNullOrEmpty(target) || string.Equals(target, stored.Currency, StringComparison.Ordinal))
         {
-            return Result.Success(new ProductPrice(query.ProductId, stored.Amount, stored.Currency, null, null));
+            return Result.Success(new ProductPrice(query.ProductId.Value, stored.Amount, stored.Currency, null, null));
         }
 
         var rate = await exchangeRates.GetRateAsync(stored.Currency, target, cancellationToken);
@@ -40,7 +40,7 @@ internal sealed class GetProductPriceQueryHandler(
         }
 
         var converted = decimal.Round(stored.Amount * rate.Rate, 2, MidpointRounding.ToEven);
-        return Result.Success(new ProductPrice(query.ProductId, converted, target, rate.Rate, rate.AsOf));
+        return Result.Success(new ProductPrice(query.ProductId.Value, converted, target, rate.Rate, rate.AsOf));
     }
 
     private sealed record StoredPrice(decimal Amount, string Currency);

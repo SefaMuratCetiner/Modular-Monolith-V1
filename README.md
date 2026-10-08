@@ -48,7 +48,7 @@ docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.ym
 
 | User | Tenant | Roles |
 |---|---|---|
-| `alice` | `acme` | user, admin |
+| `alice` | `acme` | user, admin, operator |
 | `bob` | `acme` | user |
 | `carol` | `globex` | user, admin |
 
@@ -107,15 +107,16 @@ flowchart LR
 HTTP -> HTTP platform                            forwarded headers, HTTPS/HSTS, security headers, compression
      -> Authentication -> tenant -> timeout -> rate limit -> authorization
      -> Endpoint (FastEndpoints)                 thin adapter, Result -> RFC 9457 problem details
-     -> IdempotencyPreProcessor                  optional Idempotency-Key (Valkey, tenant+user scoped)
+     -> IdempotencyPreProcessor                  Idempotency-Key per endpoint policy (Valkey, hashed, tenant+user scoped)
      -> LoggingCommandDecorator
      -> TelemetryCommandDecorator                span + duration histogram
      -> ValidationCommandDecorator               FluentValidation -> 400 before any transaction
-     -> TransactionalCommandDecorator            BEGIN
+     -> TransactionalCommandDecorator            BEGIN (re-run on transient DB failures before COMMIT)
           -> CommandHandler                      business logic, returns Result<T>
-          -> DomainEventDispatcher               in-module handlers (e.g. write to outbox)
-          -> AuditWriter                         audit row in the same transaction
-        COMMIT -> after-commit callbacks         cache invalidation, immediate outbox trigger
+          -> Repository                          versioned writes (optimistic concurrency), before/after snapshots
+          -> DomainEventDispatcher               in-module handlers (e.g. write to outbox + traceparent)
+          -> AuditWriter                         audit row (payload + before/after changes) in the same transaction
+        COMMIT -> after-commit callbacks         cache region invalidation, in-process outbox signal
 ```
 
 ---
@@ -139,15 +140,16 @@ ModularMonolithV1/
 └── src/
     ├── Aspire/
     │   ├── ModularMonolith.AppHost/            # Program.cs: containers, parameters, wiring
-    │   └── ModularMonolith.ServiceDefaults/    # OTel, health endpoints, resilience
+    │   └── ModularMonolith.ServiceDefaults/    # OTel, health endpoints, service discovery
     ├── Host/ModularMonolith.Host/
     │   ├── Program.cs                          # composition root (module list lives here)
     │   ├── Configuration/                      # HttpPlatform, Security, Logging, BackgroundJobs, ApiConventions,
     │   │                                       # SecurityHeadersMiddleware, *Options + *OptionsValidator
+    │   ├── Operations/                         # operator endpoints: outbox dead-letter list and replay
     │   └── appsettings*.json  ModularMonolith.Host.http
     ├── Shared/
     │   ├── ModularMonolith.Shared.Kernel/      # pure building blocks
-    │   │   ├── Domain/      Entity, AggregateRoot, IDomainEvent, IAuditable, ISoftDeletable
+    │   │   ├── Domain/      Entity<TId>, AggregateRoot<TId>, IVersioned, IDomainEvent, IAuditable, ISoftDeletable
     │   │   ├── Results/     Result, Result<T>, Error, ValidationError, ErrorType
     │   │   ├── Paging/      PageRequest (validated), PagedResult<T>
     │   │   ├── Cqrs/        ICommand, IQuery, I*Handler, IDomainEventHandler
@@ -157,14 +159,17 @@ ModularMonolithV1/
     │       ├── Configuration/  AddValidatedOptions (bind + IValidateOptions + ValidateOnStart)
     │       ├── Serialization/  JsonDefaults (the single JSON convention)
     │       ├── Modules/        IModule, ModuleCatalog
-    │       ├── Data/           DbSession (IDbSession + IUnitOfWork), SqlIdentifier, DatabaseOptions
+    │       ├── Data/           DbSession (IDbSession + IUnitOfWork), AuditChange, DapperTypeHandlers, SqlIdentifier
     │       ├── Migrations/     ModuleMigrator (DbUp per module, advisory lock, grants)
     │       ├── Cqrs/           decorators, HandlerRegistration, DomainEventDispatcher, AuditWriter
-    │       ├── Messaging/      Outbox, OutboxProcessor, InProcessEventBus, Inbox decorator, registry
+    │       ├── Messaging/      Outbox, OutboxSignal + OutboxDispatcherService, OutboxProcessor (leases),
+    │       │                   InProcessEventBus, Inbox decorator, OutboxAdministration (dead letters),
+    │       │                   OutboxMetricsCollector, RetentionJob
     │       ├── Tenancy/        TenantContext, TenantResolutionMiddleware, TenancyOptions
-    │       ├── Security/       HttpCurrentUser
-    │       ├── Caching/        ICacheStore (keys + versioned regions), ValkeyCacheStore, CacheOptions
-    │       ├── Idempotency/    FastEndpoints pre/post processors, Valkey store
+    │       ├── Security/       HttpCurrentUser, ClaimNames, AppRoles
+    │       ├── Caching/        ICacheStore, CacheRegion/CacheKey, CacheKeyFactory, ValkeyCacheStore (single-flight),
+    │       │                   ValkeyConnection (async connect)
+    │       ├── Idempotency/    FastEndpoints pre/post processors, IdempotencyPolicy, Valkey store
     │       ├── Localization/   JSON IStringLocalizer per module assembly
     │       ├── Health/         PostgreSQL, Valkey checks
     │       ├── Observability/  ActivitySource/Meter, source-generated log messages
@@ -175,20 +180,22 @@ ModularMonolithV1/
         │   └── ModularMonolith.Catalog/
         │       ├── CatalogModule.cs                 # the only public type
         │       ├── CatalogOptions.cs  CatalogFeatures.cs
-        │       ├── Domain/          Product, Money, ProductCreatedDomainEvent, CatalogErrors
+        │       ├── Domain/          Product, ProductId, Sku, Money, SellerId, domain events, CatalogErrors
         │       ├── Features/
         │       │   ├── CreateProduct/   Endpoint, Command, Handler, Validator, PublishProductCreated
-        │       │   ├── GetProduct/      Endpoint, Query (+ read model), Handler (target of 201 Location)
+        │       │   ├── GetProduct/      Endpoint, Query (+ read model incl. version), Handler (target of 201 Location)
+        │       │   ├── ChangeProductPrice/ Endpoint, Command, Handler, Validator (optimistic concurrency)
         │       │   ├── ListProducts/    Endpoint, Query (+ read model), Handler (paged, cached per page)
         │       │   ├── GetProductPrice/ Endpoint, Query, Handler (currency conversion)
         │       │   └── SyncSeller/      UserRegisteredHandler (consumes Identity's event)
-        │       ├── Infrastructure/  ProductRepository, ExchangeRates/ (Refit + ACL), Migrations/001_catalog.sql
+        │       ├── Infrastructure/  ProductRepository, CatalogCache (regions), ExchangeRates/ (Refit + ACL),
+        │       │                    Migrations/001_catalog.sql, 002_catalog_v2.sql
         │       └── Resources/Catalog.en.json
         └── Identity/
             ├── ModularMonolith.Identity.Contracts/  UserRegisteredIntegrationEvent
             └── ModularMonolith.Identity/
                 ├── IdentityModule.cs  IdentityOptions.cs  IdentityFeatures.cs
-                ├── Domain/          UserProfile, UserRegisteredDomainEvent, IdentityErrors
+                ├── Domain/          UserProfile, UserProfileId, Email, SubjectId, UserRegisteredDomainEvent, IdentityErrors
                 ├── Features/        RegisterUser/, GetCurrentUser/, ListUsers/
                 ├── Infrastructure/  UserProfileRepository, Keycloak/ (Refit + health check), Migrations/
                 └── Resources/Identity.en.json
@@ -200,37 +207,48 @@ ModularMonolithV1/
 
 These are condensed from the real sources so the patterns are visible in one place.
 
-### 1. Aggregate: invariants live in the domain
+### 1. Aggregate: invariants, typed identity and value objects
 
 ```csharp
 // src/Modules/Catalog/ModularMonolith.Catalog/Domain/Product.cs
-internal sealed partial class Product : AggregateRoot          // internal: invisible outside the module
+// Strongly typed id (UUIDv7) and value objects: a ProductId can never be passed where a
+// UserProfileId is expected, and an invalid Sku or Money cannot exist.
+internal readonly record struct ProductId(Guid Value) { public static ProductId New(DateTimeOffset now) => new(Guid.CreateVersion7(now)); }
+
+internal sealed class Product : AggregateRoot<ProductId>       // internal: invisible outside the module
 {
-    public const int MaxNameLength = 200;
-
-    private Product(Guid id, string name, string sku, Money price, string sellerId) : base(id) { /* assign */ }
-
     public string Name { get; }
-    public string Sku { get; }
-    public Money Price { get; }                                  // value object: amount > 0, ISO currency
-    public string SellerId { get; }
+    public Sku Sku { get; }                                      // value object: normalized, validated
+    public Money Price { get; private set; }                     // value object: amount > 0, ISO currency
+    public SellerId SellerId { get; }                            // value object: identity-provider subject
+    // Inherited: Id, Version (optimistic concurrency), Created*/Modified* audit fields, IsDeleted.
 
     // Factory returns Result<T> instead of throwing: invalid products cannot exist,
     // whichever entry point creates them (HTTP, message handler, test).
     public static Result<Product> Create(string? name, string? sku, decimal amount, string? currency,
-                                         string sellerId, DateTimeOffset now)
+                                         SellerId sellerId, DateTimeOffset now)
     {
-        if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > MaxNameLength)
-            return Result.Failure<Product>(CatalogErrors.NameInvalid);
-        // ... SKU and Money validation ...
-        var product = new Product(Guid.CreateVersion7(now), name.Trim(), normalizedSku, price.Value, sellerId);
-
-        // Domain event: dispatched by the unit of work INSIDE the same transaction.
-        product.Raise(new ProductCreatedDomainEvent(Guid.CreateVersion7(now), now, product.Id, /* ... */));
+        // ... name check, Sku.Create(sku), Money.Create(amount, currency) ...
+        var product = new Product(ProductId.New(now), trimmedName, validSku.Value, price.Value, sellerId);
+        product.Raise(new ProductCreatedDomainEvent(/* dispatched INSIDE the same transaction */));
         return Result.Success(product);
     }
+
+    // Behaviour lives on the aggregate (tell, do not ask).
+    public Result ChangePrice(decimal amount, string? currency, DateTimeOffset now) { /* validate, raise event */ }
 }
 // Note: there is no TenantId on the entity. Tenancy is enforced by PostgreSQL RLS.
+```
+
+```csharp
+// Infrastructure/ProductRepository.cs: optimistic concurrency + before/after audit
+var before = /* select the audited fields */;
+var updated = await connection.ExecuteAsync("""
+    update catalog.products set price = @Amount, ..., version = version + 1
+    where id = @Id and version = @Version
+    """, ...);
+if (updated == 0) return false;                                  // someone else won: handler returns 409
+unitOfWork.RecordChange(new AuditChange("product", id, AuditChange.Update, before, after));
 ```
 
 ### 2. A complete vertical slice: `Features/CreateProduct`
@@ -403,7 +421,8 @@ create policy tenant_isolation on catalog.products
    - The role is a `NOLOGIN`, non-superuser role that owns nothing, so PostgreSQL RLS applies even when the login is a superuser in development.
    - A bug that forgets a `WHERE tenant_id = …` still can't leak data.
 4. **Schema per module, not per tenant.** One migration run covers all tenants. There are no schema-name collisions and no per-tenant provisioning.
-5. **Caches and idempotency keys** are prefixed with the tenant (and the user for idempotency).
+5. **Caches and idempotency keys** contain the tenant (and the user for idempotency). Only regions explicitly declared `CacheScope.Shared` (e.g. exchange rates) are tenant-independent.
+6. **Logs and traces carry the tenant.** Requests and message consumers add a `TenantId` log property and a `tenant.id` span tag. Metrics never get tenant tags, to keep cardinality bounded.
 
 > **Production note:** connect with a non-superuser login that is a member of `modular_monolith_app` (`grant modular_monolith_app to <login>`). Run migrations with the schema owner.
 
@@ -412,12 +431,28 @@ create policy tenant_isolation on catalog.products
 | Concern | Mechanism |
 |---|---|
 | Event published if and only if the change commits | Transactional outbox in the publisher's schema, written by in-transaction domain-event handlers |
-| Low latency | An immediate Hangfire job is enqueued after commit; a recurring sweep (`Outbox:SweepCron`) is the safety net |
-| Multiple replicas | Rows are claimed with `FOR UPDATE SKIP LOCKED`; migrations run under `pg_advisory_lock` |
+| Low latency without storage churn | After commit an in-process signal wakes `OutboxDispatcherService` (no job is written per commit); a recurring Hangfire sweep (`Outbox:SweepCron`) is the safety net |
+| No locks held while consumers run | A short transaction claims a batch (`FOR UPDATE SKIP LOCKED`) and leases it (`status = 'processing'`, `locked_until`); delivery happens outside any outbox transaction; a crashed worker's lease expires and the batch is reclaimed |
+| Multiple replicas | Leased claiming is replica-safe; migrations run under `pg_advisory_lock` |
 | All tenants drained | The outbox table has no RLS; each message carries `tenant_id`, and consumers run in a scope bound to it |
 | Retries | In-process retry (3), then exponential backoff (`next_attempt_at`), then `status = 'dead'` after `Outbox:MaxAttempts` |
 | Exactly-once effect per consumer | Inbox `(message_id, handler)` is inserted in the consumer's transaction; handlers that already succeeded are skipped on redelivery |
+| Dead letters | Inspect and replay with the operator endpoints `GET /api/v1/ops/outbox/{module}/dead-letters` and `POST .../dead-letters[/{id}]/requeue` |
+| One trace end to end | The producer's W3C `traceparent` is stored with the message; consumer spans are its children |
+| Retention | Daily Hangfire job per module (`Retention:*`): delivered outbox rows after 7 days, inbox rows after 30 days, audit rows only if `AuditDays` > 0; dead letters are never purged |
 | Safe deserialization | Only types exported by registered `*.Contracts` assemblies can be loaded; there is no `dynamic` dispatch |
+
+## Data access and caching
+
+- **Unit of work.** One connection and transaction per command, owned by the pipeline. Transient failures (connection loss, deadlock, serialization failure) before COMMIT re-run the whole unit of work on a fresh connection (`Database:TransientRetries`). A failure during COMMIT is never retried, because its outcome is unknown.
+- **Optimistic concurrency.** Every entity has a `version`. Updates are conditional on it and increment it; a stale version returns `409 concurrency_conflict`. `GET /catalog/products/{id}` returns the version and `PUT /catalog/products/{id}/price` expects it back.
+- **Audit trail.** Each command writes one `audit_log` row: who, what (payload), from where (IP), the trace id, and the before/after snapshot of every entity it changed (`changes` column).
+- **Cache keys.** Keys are built in one place (`CacheKeyFactory`): `mm:{environment}:{t:{tenant}|shared}:{module}:{resource}:s{schemaVersion}[:g{generation}]:{item}`. Regions are declared per module (e.g. `CatalogCache`). Item parts that are not simple identifiers are hashed, so user input never appears in a key.
+- **Stampede protection.** On a miss only one caller per key and instance runs the factory; the others wait and reuse the result. TTLs get up to 10% jitter.
+- **Invalidation.** Invalidatable regions have a generation counter: `InvalidateAsync(region)` drops every entry (e.g. all product-list pages) at once.
+- **Valkey connection.** Opened asynchronously during startup. The cache degrades to the source when Valkey is down.
+- **Idempotency.** Configured per endpoint with `IdempotencyPolicy`: `Default` (header optional, fails open), `Critical` (fails closed with 503 if the store is down; used by CreateProduct) or `Required` (header mandatory). Record keys are SHA-256 hashes.
+- **Outbound HTTP.** Each dependency has its own resilience pipeline (timeouts, retries with jitter, circuit breaker) sized for it: exchange rates fail fast; the Keycloak readiness probe never retries for long. There is no global pipeline.
 
 ## Observability (one pipeline per signal)
 
@@ -428,6 +463,7 @@ create policy tenant_isolation on catalog.products
   - `modmono.outbox.processed`
   - `modmono.outbox.failed`
   - `modmono.outbox.dead_lettered`
+  - `modmono.outbox.pending`, `modmono.outbox.dead`, `modmono.outbox.oldest_pending_age` (backlog and consumer lag, sampled every `Outbox:MetricsIntervalSeconds`)
 - **Logs** go through Serilog to the console and to Loki (`Observability:LokiUrl`). They also go to OTLP when `Observability:OtlpLogs=true`. Trace and span ids are included.
 - **Grafana** datasources are provisioned with fixed UIDs and these links: Tempo → Loki, Loki → Tempo, Prometheus exemplars → Tempo. A starter dashboard is included.
 
@@ -438,7 +474,7 @@ create policy tenant_isolation on catalog.products
 - **Defaults:**
   - The fallback policy requires authentication everywhere.
   - `/health/*` and `/metrics` opt out explicitly.
-  - The Hangfire dashboard requires role `admin`.
+  - Tenant user management requires role `admin`; cross-tenant tools (Hangfire dashboard, dead-letter replay) require role `operator`, which tenant users never get.
 - **Rate limiting:** a fixed window per tenant and user, falling back to the client IP.
 - **Secrets:**
   - Aspire uses secret parameters.
@@ -470,10 +506,11 @@ Every section is a strongly typed options class with an `IValidateOptions<T>` va
 | Section | Validated rules |
 |---|---|
 | `ConnectionStrings:postgres`, `ConnectionStrings:cache` | Must be present (names configurable in `Database` / `Cache`) |
-| `Database` | Connection string name set; `ApplicationRole` is a lowercase SQL identifier |
+| `Database` | Connection string name set; `ApplicationRole` is a lowercase SQL identifier; `TransientRetries` 0-5 |
 | `Authentication` | `Authority` is an absolute URL, https unless `RequireHttpsMetadata=false` (development only); audience and web client id set |
 | `Tenancy` | Claim type set; valid default tenant when the fallback is enabled; `RootDomain` is a host name |
-| `Outbox` | Batch size, batches per run, attempts and delays within range; cron has 5 or 6 fields |
+| `Outbox` | Batch size, batches per run, attempts, delays, lease and metrics interval within range; cron has 5 or 6 fields |
+| `Retention` | Days are 0 (keep) or positive; inbox kept at least 7 days; batch size and cron valid |
 | `Localization` | At least one known culture |
 | `RateLimiting` | Permit limit and window within range |
 | `Http` | Timeout, body size, HTTPS port and HSTS max-age within range |
@@ -489,14 +526,14 @@ Behind a TLS-terminating load balancer or ingress, set `ReverseProxy__KnownNetwo
 ### … a slice to an existing module
 
 1. Create `Features/<UseCase>/`.
-2. Add a `…Command : ICommand<T>` or `…Query : IQuery<T>`, a handler, an optional `AbstractValidator<…>`, and a FastEndpoints endpoint with slice-local request and response records. List queries take a `PageRequest` and return `PagedResult<T>`; endpoints document their responses with `Description(... .ProducesProblems(...), clearDefaults: true)`.
+2. Add a `…Command : ICommand<T>` or `…Query : IQuery<T>` (use the module's typed ids, e.g. `ProductId`, inside the module and `Guid` only at the HTTP boundary), a handler, an optional `AbstractValidator<…>`, and a FastEndpoints endpoint with slice-local request and response records. List queries take a `PageRequest` and return `PagedResult<T>`; endpoints document their responses with `Description(... .ProducesProblems(...), clearDefaults: true)`.
 3. That's all. Handlers and validators are picked up by assembly scanning and wrapped by the decorator chain automatically.
 
 ### … a module
 
 1. Create `src/Modules/<Name>/ModularMonolith.<Name>` and `ModularMonolith.<Name>.Contracts`. Copy a csproj; reference Kernel, Shared.Infrastructure and only other modules' `*.Contracts`.
 2. Add a public `<Name>Module : IModule` with a unique `Schema`.
-3. Add `Infrastructure/Migrations/001_<name>.sql` with the tables. Include `tenant_id` and the RLS policy, plus `outbox_messages`, `inbox_messages` and `audit_log` (copy them from Catalog).
+3. Add `Infrastructure/Migrations/001_<name>.sql` with the tables. Include `tenant_id`, `version` and the RLS policy, plus `outbox_messages`, `inbox_messages` and `audit_log` with the columns of Catalog's `001` and `002` scripts. Never edit an applied migration; add the next numbered script instead.
 4. Add `new <Name>Module()` to the module list in `Host/Program.cs` and a project reference in the Host csproj.
 
 ---

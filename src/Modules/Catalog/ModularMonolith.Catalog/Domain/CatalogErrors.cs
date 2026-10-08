@@ -13,6 +13,8 @@ internal static class CatalogErrors
 
     public static Error CurrencyInvalid { get; } = Error.Validation("catalog.currency_invalid", "Currency must be a 3-letter ISO 4217 code.");
 
+    public static Error SellerInvalid { get; } = Error.Forbidden("catalog.seller_invalid", "Products can only be listed by an authenticated user.");
+
     public static Error SkuTaken { get; } = Error.Conflict("catalog.sku_taken", "A product with this SKU already exists.");
 
     public static Error ProductNotFound { get; } = Error.NotFound("catalog.product_not_found", "The product does not exist.");

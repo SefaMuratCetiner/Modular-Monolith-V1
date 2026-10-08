@@ -40,6 +40,16 @@ public sealed class IdentityModule : IModule
             {
                 var authority = provider.GetRequiredService<IOptions<IdentityOptions>>().Value.Authority!;
                 client.BaseAddress = new Uri(authority.TrimEnd('/'));
+            })
+
+            // Dedicated pipeline: a readiness probe must answer quickly, so no long retry chains.
+            .AddStandardResilienceHandler(resilience =>
+            {
+                resilience.AttemptTimeout.Timeout = TimeSpan.FromSeconds(2);
+                resilience.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(5);
+                resilience.Retry.MaxRetryAttempts = 1;
+                resilience.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(30);
+                resilience.CircuitBreaker.BreakDuration = TimeSpan.FromSeconds(15);
             });
         services.AddHealthChecks().AddCheck<KeycloakHealthCheck>("keycloak", tags: ["ready"]);
     }

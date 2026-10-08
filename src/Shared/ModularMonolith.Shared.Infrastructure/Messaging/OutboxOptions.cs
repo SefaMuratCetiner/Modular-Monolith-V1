@@ -23,6 +23,15 @@ public sealed class OutboxOptions
     /// <summary>Gets or sets the maximum retry delay in seconds.</summary>
     public int MaxDelaySeconds { get; set; } = 3600;
 
+    /// <summary>
+    /// Gets or sets how long a claimed message is leased to one worker. A worker that crashes mid-batch
+    /// loses its lease and the message is picked up again after this time.
+    /// </summary>
+    public int LeaseSeconds { get; set; } = 120;
+
+    /// <summary>Gets or sets the interval of the outbox backlog metrics collector.</summary>
+    public int MetricsIntervalSeconds { get; set; } = 30;
+
     /// <summary>Gets or sets the recurring sweep cron expression (safety net for missed triggers).</summary>
     public string SweepCron { get; set; } = "* * * * *";
 }

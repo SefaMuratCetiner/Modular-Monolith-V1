@@ -15,7 +15,7 @@ internal sealed class PublishUserRegistered(IOutbox outbox, ITenantContext tenan
                 domainEvent.EventId,
                 domainEvent.OccurredAt,
                 tenantContext.TenantId,
-                domainEvent.UserProfileId,
+                domainEvent.UserProfileId.Value,
                 domainEvent.SubjectId,
                 domainEvent.Email,
                 domainEvent.DisplayName),

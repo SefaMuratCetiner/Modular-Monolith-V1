@@ -34,6 +34,16 @@ internal sealed class OutboxOptionsValidator : IValidateOptions<OutboxOptions>
             failures.Add("MaxDelaySeconds must be greater than or equal to BaseDelaySeconds.");
         }
 
+        if (options.LeaseSeconds is < 10 or > 3600)
+        {
+            failures.Add("LeaseSeconds must be between 10 and 3600.");
+        }
+
+        if (options.MetricsIntervalSeconds is < 5 or > 3600)
+        {
+            failures.Add("MetricsIntervalSeconds must be between 5 and 3600.");
+        }
+
         var cronFields = options.SweepCron?.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length ?? 0;
         if (cronFields is not (5 or 6))
         {

@@ -3,13 +3,15 @@ namespace ModularMonolith.Shared.Kernel.Domain;
 /// <summary>
 /// Consistency boundary that raises domain events.
 /// </summary>
-public abstract class AggregateRoot : Entity, IHasDomainEvents
+/// <typeparam name="TId">The strongly typed identifier.</typeparam>
+public abstract class AggregateRoot<TId> : Entity<TId>, IHasDomainEvents
+    where TId : struct, IEquatable<TId>
 {
     private readonly List<IDomainEvent> _domainEvents = [];
 
-    /// <summary>Initializes a new instance of the <see cref="AggregateRoot"/> class.</summary>
+    /// <summary>Initializes a new instance of the <see cref="AggregateRoot{TId}"/> class.</summary>
     /// <param name="id">The aggregate identifier.</param>
-    protected AggregateRoot(Guid id)
+    protected AggregateRoot(TId id)
         : base(id)
     {
     }

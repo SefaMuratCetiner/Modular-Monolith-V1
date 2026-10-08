@@ -10,93 +10,149 @@ namespace ModularMonolith.Shared.Infrastructure.Caching;
 
 /// <summary>
 /// Valkey implementation of <see cref="ICacheStore"/> (Redis protocol via StackExchange.Redis).
-/// The cache is best-effort: if Valkey is unavailable the source is queried directly.
+/// <list type="bullet">
+/// <item>Stampede protection: on a miss only one caller per key (per instance) runs the factory;
+/// concurrent callers wait and then read the fresh value.</item>
+/// <item>TTL jitter: expirations of entries written together are spread out.</item>
+/// <item>Best effort: Valkey failures are logged and the factory result is returned uncached.</item>
+/// </list>
 /// </summary>
 internal sealed class ValkeyCacheStore(
-    IConnectionMultiplexer connection,
+    ValkeyConnection valkey,
+    CacheKeyFactory keys,
     ITenantContext tenantContext,
     ILogger<ValkeyCacheStore> logger) : ICacheStore
 {
-    public async Task<T> GetOrCreateAsync<T>(string key, Func<CancellationToken, Task<T>> factory, TimeSpan timeToLive, CancellationToken cancellationToken)
+    // Striped locks: bounded memory, no per-key bookkeeping, rare false sharing between keys.
+    private static readonly SemaphoreSlim[] Stripes = [.. Enumerable.Range(0, 256).Select(_ => new SemaphoreSlim(1, 1))];
+
+    public async Task<T> GetOrCreateAsync<T>(CacheKey key, Func<CancellationToken, Task<T>> factory, TimeSpan timeToLive, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(factory);
-        var redisKey = TenantKey(key);
+
+        string redisKey;
         try
         {
-            var cached = await connection.GetDatabase().StringGetAsync(redisKey);
-            if (cached.HasValue)
+            redisKey = keys.Entry(key, tenantContext, await GetGenerationAsync(key.Region));
+            var hit = await TryGetAsync<T>(redisKey);
+            if (hit.Found)
             {
-                var value = JsonSerializer.Deserialize<T>(cached.ToString(), JsonDefaults.Options);
-                if (value is not null)
-                {
-                    return value;
-                }
+                return hit.Value!;
             }
         }
         catch (RedisException exception)
         {
-            logger.CacheUnavailable(exception, redisKey);
+            logger.CacheUnavailable(exception, key.Region.Resource);
             return await factory(cancellationToken);
         }
 
-        var created = await factory(cancellationToken);
+        var stripe = Stripes[(redisKey.GetHashCode(StringComparison.Ordinal) & int.MaxValue) % Stripes.Length];
+        await stripe.WaitAsync(cancellationToken);
         try
         {
-            await connection.GetDatabase().StringSetAsync(redisKey, JsonSerializer.Serialize(created, JsonDefaults.Options), timeToLive);
-        }
-        catch (RedisException exception)
-        {
-            logger.CacheUnavailable(exception, redisKey);
-        }
+            // Another caller may have filled the entry while we waited.
+            var filled = await TryGetBestEffortAsync<T>(redisKey, key.Region);
+            if (filled.Found)
+            {
+                return filled.Value!;
+            }
 
-        return created;
+            var created = await factory(cancellationToken);
+            try
+            {
+                await SetAsync(redisKey, created, timeToLive);
+            }
+            catch (RedisException exception)
+            {
+                logger.CacheUnavailable(exception, key.Region.Resource);
+            }
+
+            return created;
+        }
+        finally
+        {
+            stripe.Release();
+        }
     }
 
-    public async Task RemoveAsync(string key, CancellationToken cancellationToken)
+    public async Task RemoveAsync(CacheKey key, CancellationToken cancellationToken)
     {
-        var redisKey = TenantKey(key);
+        ArgumentNullException.ThrowIfNull(key);
         try
         {
-            await connection.GetDatabase().KeyDeleteAsync(redisKey);
+            var redisKey = keys.Entry(key, tenantContext, await GetGenerationAsync(key.Region));
+            await valkey.Multiplexer.GetDatabase().KeyDeleteAsync(redisKey);
         }
         catch (RedisException exception)
         {
-            logger.CacheUnavailable(exception, redisKey);
+            logger.CacheUnavailable(exception, key.Region.Resource);
         }
     }
 
-    public async Task<T> GetOrCreateInRegionAsync<T>(string region, string key, Func<CancellationToken, Task<T>> factory, TimeSpan timeToLive, CancellationToken cancellationToken)
+    public async Task InvalidateAsync(CacheRegion region, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(factory);
-        long version;
+        ArgumentNullException.ThrowIfNull(region);
+        if (!region.Invalidatable)
+        {
+            throw new InvalidOperationException($"Cache region '{region.Module}:{region.Resource}' is not invalidatable.");
+        }
+
         try
         {
-            var stored = await connection.GetDatabase().StringGetAsync(RegionVersionKey(region));
-            version = stored.HasValue && long.TryParse(stored.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
+            await valkey.Multiplexer.GetDatabase().StringIncrementAsync(keys.Generation(region, tenantContext));
         }
         catch (RedisException exception)
         {
-            logger.CacheUnavailable(exception, RegionVersionKey(region));
-            return await factory(cancellationToken);
+            logger.CacheUnavailable(exception, region.Resource);
         }
-
-        return await GetOrCreateAsync($"{region}:v{version}:{key}", factory, timeToLive, cancellationToken);
     }
 
-    public async Task InvalidateRegionAsync(string region, CancellationToken cancellationToken)
+    private async Task<long?> GetGenerationAsync(CacheRegion region)
     {
-        var versionKey = RegionVersionKey(region);
+        if (!region.Invalidatable)
+        {
+            return null;
+        }
+
+        var stored = await valkey.Multiplexer.GetDatabase().StringGetAsync(keys.Generation(region, tenantContext));
+        return stored.HasValue && long.TryParse(stored.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var generation)
+            ? generation
+            : 0;
+    }
+
+    private async Task<CacheHit<T>> TryGetAsync<T>(string redisKey)
+    {
+        var cached = await valkey.Multiplexer.GetDatabase().StringGetAsync(redisKey);
+        if (!cached.HasValue)
+        {
+            return default;
+        }
+
+        var value = JsonSerializer.Deserialize<T>(cached.ToString(), JsonDefaults.Options);
+        return value is null ? default : new CacheHit<T>(Found: true, value);
+    }
+
+    private async Task<CacheHit<T>> TryGetBestEffortAsync<T>(string redisKey, CacheRegion region)
+    {
         try
         {
-            await connection.GetDatabase().StringIncrementAsync(versionKey);
+            return await TryGetAsync<T>(redisKey);
         }
         catch (RedisException exception)
         {
-            logger.CacheUnavailable(exception, versionKey);
+            logger.CacheUnavailable(exception, region.Resource);
+            return default;
         }
     }
 
-    private string TenantKey(string key) => $"cache:{tenantContext.TenantId}:{key}";
+    private async Task SetAsync<T>(string redisKey, T value, TimeSpan timeToLive)
+    {
+#pragma warning disable CA5394 // Jitter is not security-sensitive.
+        var jitter = TimeSpan.FromMilliseconds(timeToLive.TotalMilliseconds * 0.1 * Random.Shared.NextDouble());
+#pragma warning restore CA5394
+        await valkey.Multiplexer.GetDatabase().StringSetAsync(redisKey, JsonSerializer.Serialize(value, JsonDefaults.Options), timeToLive - jitter);
+    }
 
-    private string RegionVersionKey(string region) => TenantKey($"{region}:version");
+    private readonly record struct CacheHit<T>(bool Found, T? Value);
 }

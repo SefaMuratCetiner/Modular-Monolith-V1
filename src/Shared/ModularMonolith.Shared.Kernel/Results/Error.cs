@@ -12,6 +12,15 @@ public record Error(string Code, string Message, ErrorType Type)
     /// <summary>Gets the "no error" sentinel used by successful results.</summary>
     public static Error None { get; } = new(string.Empty, string.Empty, ErrorType.Failure);
 
+    /// <summary>
+    /// Gets the optimistic-concurrency conflict: the entity changed since the caller read it.
+    /// Clients should reload the resource and retry with the new version.
+    /// </summary>
+    public static Error ConcurrencyConflict { get; } = new(
+        "concurrency_conflict",
+        "The resource was modified by another request. Reload it and retry with the current version.",
+        ErrorType.Conflict);
+
     /// <summary>Creates a validation error.</summary>
     /// <param name="code">The error code.</param>
     /// <param name="message">The message.</param>

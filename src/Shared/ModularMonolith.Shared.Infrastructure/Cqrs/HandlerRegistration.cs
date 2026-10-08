@@ -66,14 +66,19 @@ internal static class HandlerRegistration
     {
         services.TryAddScoped(implementationType);
         var arguments = serviceType.GetGenericArguments();
-        Type[] closedDecorators = [.. decorators.Select(decorator => decorator.MakeGenericType(arguments))];
+
+        // Constructor lookup happens once here; each resolve only invokes the compiled factories.
+        ObjectFactory[] factories =
+        [
+            .. decorators.Select(decorator => ActivatorUtilities.CreateFactory(decorator.MakeGenericType(arguments), [serviceType])),
+        ];
 
         services.AddScoped(serviceType, provider =>
         {
             var instance = provider.GetRequiredService(implementationType);
-            foreach (var decorator in closedDecorators)
+            foreach (var factory in factories)
             {
-                instance = ActivatorUtilities.CreateInstance(provider, decorator, instance);
+                instance = factory(provider, [instance]);
             }
 
             return instance;

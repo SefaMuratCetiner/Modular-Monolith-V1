@@ -12,30 +12,37 @@ internal sealed class RegisterUserCommandHandler(
     IUserProfileRepository profiles,
     ICurrentUser currentUser,
     IFeatureManager featureManager,
-    TimeProvider timeProvider) : ICommandHandler<RegisterUserCommand, Guid>
+    TimeProvider timeProvider) : ICommandHandler<RegisterUserCommand, UserProfileId>
 {
-    public async Task<Result<Guid>> HandleAsync(RegisterUserCommand command, CancellationToken cancellationToken)
+    public async Task<Result<UserProfileId>> HandleAsync(RegisterUserCommand command, CancellationToken cancellationToken)
     {
-        if (currentUser.UserId is not { } subjectId)
+        var subject = SubjectId.Create(currentUser.UserId);
+        if (subject.IsFailure)
         {
-            return Result.Failure<Guid>(IdentityErrors.NotAuthenticated);
+            return Result.Failure<UserProfileId>(subject.Error);
         }
 
-        if (await profiles.SubjectExistsAsync(subjectId, cancellationToken))
+        var email = Email.Create(command.Email);
+        if (email.IsFailure)
         {
-            return Result.Failure<Guid>(IdentityErrors.AlreadyRegistered);
+            return Result.Failure<UserProfileId>(email.Error);
         }
 
-        if (await profiles.EmailExistsAsync(command.Email, cancellationToken))
+        if (await profiles.SubjectExistsAsync(subject.Value, cancellationToken))
         {
-            return Result.Failure<Guid>(IdentityErrors.EmailTaken);
+            return Result.Failure<UserProfileId>(IdentityErrors.AlreadyRegistered);
+        }
+
+        if (await profiles.EmailExistsAsync(email.Value, cancellationToken))
+        {
+            return Result.Failure<UserProfileId>(IdentityErrors.EmailTaken);
         }
 
         var isBetaUser = await featureManager.IsEnabledAsync(IdentityFeatures.BetaOnboarding, cancellationToken);
-        var registered = UserProfile.Register(subjectId, command.Email, command.DisplayName, isBetaUser, timeProvider.GetUtcNow());
+        var registered = UserProfile.Register(subject.Value, email.Value, command.DisplayName, isBetaUser, timeProvider.GetUtcNow());
         if (registered.IsFailure)
         {
-            return Result.Failure<Guid>(registered.Error);
+            return Result.Failure<UserProfileId>(registered.Error);
         }
 
         await profiles.AddAsync(registered.Value, cancellationToken);

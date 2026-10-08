@@ -16,14 +16,26 @@ internal static partial class Log
     [LoggerMessage(EventId = 1002, Level = LogLevel.Debug, Message = "Handled {RequestKind} {RequestName}")]
     public static partial void Handled(this ILogger logger, string requestKind, string requestName);
 
+    [LoggerMessage(EventId = 1003, Level = LogLevel.Warning, Message = "Transient database failure in {CommandName} (attempt {Attempt}); retrying on a new connection")]
+    public static partial void TransientDatabaseRetry(this ILogger logger, Exception exception, string commandName, int attempt);
+
     [LoggerMessage(EventId = 1100, Level = LogLevel.Warning, Message = "Outbox message {MessageId} failed (attempt {Attempt}); next attempt at {NextAttemptAt}")]
     public static partial void OutboxRetry(this ILogger logger, Exception exception, Guid messageId, int attempt, DateTimeOffset nextAttemptAt);
 
     [LoggerMessage(EventId = 1101, Level = LogLevel.Error, Message = "Outbox message {MessageId} dead-lettered after {Attempt} attempts")]
     public static partial void OutboxDeadLettered(this ILogger logger, Exception exception, Guid messageId, int attempt);
 
-    [LoggerMessage(EventId = 1102, Level = LogLevel.Warning, Message = "Could not trigger immediate outbox dispatch for schema {Schema}; the recurring job will pick it up")]
-    public static partial void OutboxTriggerFailed(this ILogger logger, Exception exception, string schema);
+    [LoggerMessage(EventId = 1102, Level = LogLevel.Error, Message = "Outbox dispatch run for schema {Schema} failed; the recurring sweep will retry")]
+    public static partial void OutboxDispatchFailed(this ILogger logger, Exception exception, string schema);
+
+    [LoggerMessage(EventId = 1103, Level = LogLevel.Warning, Message = "Outbox metrics collection failed")]
+    public static partial void OutboxMetricsFailed(this ILogger logger, Exception exception);
+
+    [LoggerMessage(EventId = 1104, Level = LogLevel.Information, Message = "Retention removed {Count} row(s) from {Table}")]
+    public static partial void RetentionPurged(this ILogger logger, long count, string table);
+
+    [LoggerMessage(EventId = 1105, Level = LogLevel.Information, Message = "Re-queued {Count} dead-lettered outbox message(s) in {Schema}")]
+    public static partial void DeadLettersRequeued(this ILogger logger, int count, string schema);
 
     [LoggerMessage(EventId = 1200, Level = LogLevel.Warning, Message = "Handler {Handler} failed for {EventType} (attempt {Attempt})")]
     public static partial void EventHandlerRetry(this ILogger logger, Exception exception, string handler, string eventType, int attempt);

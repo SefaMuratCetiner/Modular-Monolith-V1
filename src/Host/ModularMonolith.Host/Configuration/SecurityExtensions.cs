@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 using ModularMonolith.Shared.Infrastructure.Configuration;
+using ModularMonolith.Shared.Infrastructure.Security;
 using ModularMonolith.Shared.Infrastructure.Web;
 
 namespace ModularMonolith.Host.Configuration;
@@ -23,7 +24,11 @@ namespace ModularMonolith.Host.Configuration;
 /// </summary>
 internal static class SecurityExtensions
 {
-    public const string AdminPolicy = "admin";
+    /// <summary>Tenant administrators (role <c>admin</c>).</summary>
+    public const string AdminPolicy = "tenant-admin";
+
+    /// <summary>Platform operators (role <c>operator</c>): cross-tenant tools such as Hangfire and dead-letter replay.</summary>
+    public const string OperatorPolicy = "platform-operator";
 
     private const string SelectorScheme = "jwt-or-cookie";
 
@@ -36,7 +41,8 @@ internal static class SecurityExtensions
 
         builder.Services.AddAuthorizationBuilder()
             .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build())
-            .AddPolicy(AdminPolicy, policy => policy.RequireAuthenticatedUser().RequireRole("admin"));
+            .AddPolicy(AdminPolicy, policy => policy.RequireAuthenticatedUser().RequireRole(AppRoles.Admin))
+            .AddPolicy(OperatorPolicy, policy => policy.RequireAuthenticatedUser().RequireRole(AppRoles.Operator));
 
         AddRateLimiting(builder.Services);
         return builder;
@@ -81,8 +87,8 @@ internal static class SecurityExtensions
                 options.Audience = settings.Audience;
                 options.RequireHttpsMetadata = settings.RequireHttpsMetadata;
                 options.MapInboundClaims = false;
-                options.TokenValidationParameters.NameClaimType = "preferred_username";
-                options.TokenValidationParameters.RoleClaimType = "roles";
+                options.TokenValidationParameters.NameClaimType = ClaimNames.PreferredUserName;
+                options.TokenValidationParameters.RoleClaimType = ClaimNames.Roles;
                 options.Events = new JwtBearerEvents
                 {
                     OnChallenge = WriteChallengeAsync,
@@ -112,8 +118,8 @@ internal static class SecurityExtensions
                 options.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
                 options.Scope.Add("profile");
                 options.Scope.Add("email");
-                options.TokenValidationParameters.NameClaimType = "preferred_username";
-                options.TokenValidationParameters.RoleClaimType = "roles";
+                options.TokenValidationParameters.NameClaimType = ClaimNames.PreferredUserName;
+                options.TokenValidationParameters.RoleClaimType = ClaimNames.Roles;
             });
     }
 
@@ -142,8 +148,8 @@ internal static class SecurityExtensions
                 options.AddPolicy(RateLimitPolicies.PerUser, context =>
                 {
                     // One bucket per tenant + user, so a noisy caller cannot starve everyone else.
-                    var tenant = context.User.FindFirst("tenant_id")?.Value ?? "-";
-                    var caller = context.User.FindFirst("sub")?.Value
+                    var tenant = context.User.FindFirst(ClaimNames.TenantId)?.Value ?? "-";
+                    var caller = context.User.FindFirst(ClaimNames.Subject)?.Value
                         ?? context.Connection.RemoteIpAddress?.ToString()
                         ?? "anonymous";
                     return RateLimitPartition.GetFixedWindowLimiter($"{tenant}:{caller}", _ => new FixedWindowRateLimiterOptions

@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ModularMonolith.Shared.Infrastructure.Web;
 
@@ -10,7 +12,11 @@ namespace ModularMonolith.Shared.Infrastructure.Tenancy;
 /// </summary>
 internal sealed class TenantResolutionMiddleware(RequestDelegate next)
 {
-    public async Task InvokeAsync(HttpContext context, TenantContext tenantContext, IOptions<TenancyOptions> options)
+    public async Task InvokeAsync(
+        HttpContext context,
+        TenantContext tenantContext,
+        IOptions<TenancyOptions> options,
+        ILogger<TenantResolutionMiddleware> logger)
     {
         var settings = options.Value;
         var claim = context.User.FindFirst(settings.ClaimType)?.Value;
@@ -42,7 +48,18 @@ internal sealed class TenantResolutionMiddleware(RequestDelegate next)
             return;
         }
 
-        await next(context);
+        if (!tenantContext.IsResolved)
+        {
+            await next(context);
+            return;
+        }
+
+        // Tenant on every log line (Serilog picks up logger scopes) and on the request span.
+        Activity.Current?.SetTag(TenantTelemetry.TagName, tenantContext.TenantId);
+        using (logger.BeginScope(TenantTelemetry.LogScope(tenantContext.TenantId)))
+        {
+            await next(context);
+        }
     }
 
     private static string? ResolveSubdomain(string host, string? rootDomain)

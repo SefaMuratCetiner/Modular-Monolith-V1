@@ -1,6 +1,6 @@
 using ModularMonolith.Catalog.Contracts;
 using ModularMonolith.Catalog.Domain;
-using ModularMonolith.Catalog.Features.ListProducts;
+using ModularMonolith.Catalog.Infrastructure;
 using ModularMonolith.Shared.Infrastructure.Caching;
 using ModularMonolith.Shared.Infrastructure.Data;
 using ModularMonolith.Shared.Kernel.Context;
@@ -29,7 +29,7 @@ internal sealed class PublishProductCreated(
                 domainEvent.EventId,
                 domainEvent.OccurredAt,
                 tenantContext.TenantId,
-                domainEvent.ProductId,
+                domainEvent.ProductId.Value,
                 domainEvent.Name,
                 domainEvent.Sku,
                 domainEvent.Price,
@@ -37,6 +37,6 @@ internal sealed class PublishProductCreated(
                 domainEvent.SellerId),
             cancellationToken);
 
-        unitOfWork.OnCommitted(ct => cache.InvalidateRegionAsync(ListProductsQueryHandler.CacheRegion, ct));
+        unitOfWork.OnCommitted(ct => cache.InvalidateAsync(CatalogCache.ProductList, ct));
     }
 }

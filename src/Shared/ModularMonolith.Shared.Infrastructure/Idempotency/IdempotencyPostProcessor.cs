@@ -1,6 +1,5 @@
 using System.Text.Json;
 using FastEndpoints;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ModularMonolith.Shared.Infrastructure.Observability;
 using ModularMonolith.Shared.Infrastructure.Serialization;
@@ -14,7 +13,8 @@ namespace ModularMonolith.Shared.Infrastructure.Idempotency;
 /// </summary>
 /// <typeparam name="TRequest">The endpoint request type.</typeparam>
 /// <typeparam name="TResponse">The endpoint response type.</typeparam>
-public sealed class IdempotencyPostProcessor<TRequest, TResponse> : IPostProcessor<TRequest, TResponse>
+public sealed class IdempotencyPostProcessor<TRequest, TResponse>(IdempotencyStore store, ILogger<IdempotencyStore> logger)
+    : IPostProcessor<TRequest, TResponse>
 {
     /// <inheritdoc />
     public async Task PostProcessAsync(IPostProcessorContext<TRequest, TResponse> context, CancellationToken ct)
@@ -27,7 +27,6 @@ public sealed class IdempotencyPostProcessor<TRequest, TResponse> : IPostProcess
         }
 
         http.Items.Remove(IdempotencyPreProcessor<TRequest>.ItemKey);
-        var store = http.RequestServices.GetRequiredService<IdempotencyStore>();
         try
         {
             var status = http.Response.StatusCode;
@@ -42,7 +41,7 @@ public sealed class IdempotencyPostProcessor<TRequest, TResponse> : IPostProcess
         }
         catch (RedisException exception)
         {
-            http.RequestServices.GetRequiredService<ILogger<IdempotencyStore>>().IdempotencyUnavailable(exception);
+            logger.IdempotencyUnavailable(exception);
         }
     }
 }

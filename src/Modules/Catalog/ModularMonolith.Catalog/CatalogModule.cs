@@ -39,6 +39,18 @@ public sealed class CatalogModule : IModule
         services.AddScoped<ExchangeRateProvider>();
         services.AddRefitClient<IExchangeRatesApi>()
             .ConfigureHttpClient((provider, client) =>
-                client.BaseAddress = new Uri(provider.GetRequiredService<IOptions<CatalogOptions>>().Value.ExchangeRatesBaseUrl));
+                client.BaseAddress = new Uri(provider.GetRequiredService<IOptions<CatalogOptions>>().Value.ExchangeRatesBaseUrl))
+
+            // Dedicated pipeline for this dependency: a slow free API must fail fast (the price
+            // endpoint degrades to 503) and must not be hammered with retries.
+            .AddStandardResilienceHandler(resilience =>
+            {
+                resilience.AttemptTimeout.Timeout = TimeSpan.FromSeconds(3);
+                resilience.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(8);
+                resilience.Retry.MaxRetryAttempts = 2;
+                resilience.Retry.UseJitter = true;
+                resilience.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(30);
+                resilience.CircuitBreaker.BreakDuration = TimeSpan.FromSeconds(30);
+            });
     }
 }

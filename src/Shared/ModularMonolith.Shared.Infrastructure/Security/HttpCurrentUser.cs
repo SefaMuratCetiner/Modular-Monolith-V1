@@ -13,7 +13,7 @@ internal sealed class HttpCurrentUser(IHttpContextAccessor httpContextAccessor) 
 
     public bool IsAuthenticated => httpContextAccessor.HttpContext?.User.Identity?.IsAuthenticated == true;
 
-    public string? UserId => httpContextAccessor.HttpContext?.User.FindFirst("sub")?.Value;
+    public string? UserId => httpContextAccessor.HttpContext?.User.FindFirst(ClaimNames.Subject)?.Value;
 
     public string AuditId => UserId ?? SystemUser;
 

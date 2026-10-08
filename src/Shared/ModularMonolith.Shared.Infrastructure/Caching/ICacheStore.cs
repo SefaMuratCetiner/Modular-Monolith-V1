@@ -1,45 +1,33 @@
 namespace ModularMonolith.Shared.Infrastructure.Caching;
 
 /// <summary>
-/// Tenant-scoped distributed cache (Valkey). Keys are automatically prefixed with the current
-/// tenant, so one tenant can never read another tenant's cached data.
+/// Distributed cache (Valkey) with structured keys (<see cref="CacheKey"/>), tenant or shared scope,
+/// per-key single-flight (stampede protection), TTL jitter and region-wide invalidation.
+/// The cache is best-effort: when Valkey is down every call falls through to the factory.
 /// </summary>
 public interface ICacheStore
 {
     /// <summary>Gets a cached value or creates, stores and returns it.</summary>
     /// <typeparam name="T">The value type (must be JSON serializable).</typeparam>
-    /// <param name="key">The logical key (without tenant prefix).</param>
-    /// <param name="factory">Produces the value on a cache miss.</param>
-    /// <param name="timeToLive">The expiry.</param>
+    /// <param name="key">The key.</param>
+    /// <param name="factory">Produces the value on a cache miss (runs once per key and instance at a time).</param>
+    /// <param name="timeToLive">The nominal expiry; up to 10% jitter is subtracted to spread expirations.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The value.</returns>
-    Task<T> GetOrCreateAsync<T>(string key, Func<CancellationToken, Task<T>> factory, TimeSpan timeToLive, CancellationToken cancellationToken);
+    Task<T> GetOrCreateAsync<T>(CacheKey key, Func<CancellationToken, Task<T>> factory, TimeSpan timeToLive, CancellationToken cancellationToken);
 
-    /// <summary>Removes a cached value.</summary>
-    /// <param name="key">The logical key (without tenant prefix).</param>
+    /// <summary>Removes one entry.</summary>
+    /// <param name="key">The key.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A task.</returns>
-    Task RemoveAsync(string key, CancellationToken cancellationToken);
+    Task RemoveAsync(CacheKey key, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Gets or creates a value inside a cache region. All entries of a region are invalidated at once
-    /// by <see cref="InvalidateRegionAsync"/> (e.g. every page of a paged list).
+    /// Invalidates every entry of an invalidatable region (for the current tenant when tenant-scoped)
+    /// by bumping its generation. Old entries are never read again and expire through their TTL.
     /// </summary>
-    /// <typeparam name="T">The value type (must be JSON serializable).</typeparam>
-    /// <param name="region">The logical region, e.g. <c>catalog:products</c>.</param>
-    /// <param name="key">The key inside the region, e.g. <c>page:1:size:20</c>.</param>
-    /// <param name="factory">Produces the value on a cache miss.</param>
-    /// <param name="timeToLive">The expiry.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>The value.</returns>
-    Task<T> GetOrCreateInRegionAsync<T>(string region, string key, Func<CancellationToken, Task<T>> factory, TimeSpan timeToLive, CancellationToken cancellationToken);
-
-    /// <summary>
-    /// Invalidates every entry of a region for the current tenant by bumping the region version.
-    /// Old entries are never read again and expire through their TTL.
-    /// </summary>
-    /// <param name="region">The logical region.</param>
+    /// <param name="region">The region (must have <see cref="CacheRegion.Invalidatable"/> set).</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A task.</returns>
-    Task InvalidateRegionAsync(string region, CancellationToken cancellationToken);
+    Task InvalidateAsync(CacheRegion region, CancellationToken cancellationToken);
 }

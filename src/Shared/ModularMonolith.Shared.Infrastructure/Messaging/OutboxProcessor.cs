@@ -9,11 +9,16 @@ using Npgsql;
 namespace ModularMonolith.Shared.Infrastructure.Messaging;
 
 /// <summary>
-/// Hangfire job that drains one module's outbox.
+/// Drains one module's outbox. Invoked by the in-process dispatcher right after commits and by the
+/// recurring Hangfire sweep as a safety net.
 /// <list type="bullet">
-/// <item>Rows are claimed with <c>FOR UPDATE SKIP LOCKED</c>, so any number of replicas can run it concurrently.</item>
+/// <item><b>Lease, don't lock:</b> a short transaction claims a batch (<c>FOR UPDATE SKIP LOCKED</c>) and
+/// marks it <c>processing</c> with a lease; consumers then run with no outbox transaction or row lock
+/// held. A crashed worker's lease expires and the batch is reclaimed.</item>
+/// <item>Any number of replicas can run it concurrently.</item>
 /// <item>The outbox table has no RLS: one run drains every tenant; each consumer runs in the message's tenant.</item>
 /// <item>Failures back off exponentially and are dead-lettered after <see cref="OutboxOptions.MaxAttempts"/>.</item>
+/// <item>The producer's trace context travels with the message, so consumer spans join its trace.</item>
 /// </list>
 /// </summary>
 public sealed class OutboxProcessor(
@@ -40,61 +45,68 @@ public sealed class OutboxProcessor(
 
         for (var batch = 0; batch < settings.MaxBatchesPerRun; batch++)
         {
-            var processed = await ProcessBatchAsync(table, module.Schema, settings, cancellationToken);
-            if (processed < settings.BatchSize)
+            var claimed = await ClaimBatchAsync(table, settings, cancellationToken);
+            foreach (var message in claimed)
+            {
+                await DispatchAsync(table, module.Schema, message, settings, cancellationToken);
+            }
+
+            if (claimed.Count < settings.BatchSize)
             {
                 break;
             }
         }
     }
 
-    private async Task<int> ProcessBatchAsync(string table, string schema, OutboxOptions settings, CancellationToken cancellationToken)
+    private async Task<List<OutboxRow>> ClaimBatchAsync(string table, OutboxOptions settings, CancellationToken cancellationToken)
     {
-        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         var now = timeProvider.GetUtcNow();
-
-        var claimSql = $"""
-            select id, type, payload::text as payload, attempts
-            from {table}
-            where status = 'pending' and next_attempt_at <= @Now
-            order by occurred_at
-            limit @BatchSize
-            for update skip locked
+        var sql = $"""
+            with claimable as (
+                select id from {table}
+                where (status = 'pending' and next_attempt_at <= @Now)
+                   or (status = 'processing' and locked_until < @Now)
+                order by occurred_at
+                limit @BatchSize
+                for update skip locked)
+            update {table} t
+            set status = 'processing', locked_until = @LockedUntil
+            from claimable
+            where t.id = claimable.id
+            returning t.id as Id, t.type as Type, t.payload::text as Payload, t.attempts as Attempts,
+                      t.trace_parent as TraceParent, t.occurred_at as OccurredAt
             """;
-        var messages = (await connection.QueryAsync<OutboxRow>(new CommandDefinition(
-            claimSql,
-            new { Now = now, settings.BatchSize },
-            transaction,
-            cancellationToken: cancellationToken))).AsList();
 
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<OutboxRow>(new CommandDefinition(
+            sql,
+            new { Now = now, settings.BatchSize, LockedUntil = now.AddSeconds(settings.LeaseSeconds) },
+            cancellationToken: cancellationToken));
+
+        // RETURNING has no order guarantee; keep delivery in occurrence order within the batch.
+        return [.. rows.OrderBy(row => row.OccurredAt)];
+    }
+
+    private async Task DispatchAsync(string table, string schema, OutboxRow message, OutboxOptions settings, CancellationToken cancellationToken)
+    {
         var tag = new KeyValuePair<string, object?>("module", schema);
-        foreach (var message in messages)
+        try
         {
-            try
-            {
-                var integrationEvent = registry.Deserialize(message.Type, message.Payload);
-                await eventBus.PublishAsync(integrationEvent, cancellationToken);
-                await connection.ExecuteAsync(new CommandDefinition(
-                    $"update {table} set status = 'processed', processed_at = @Now, error = null where id = @Id",
-                    new { Now = timeProvider.GetUtcNow(), message.Id },
-                    transaction,
-                    cancellationToken: cancellationToken));
-                Telemetry.OutboxProcessed.Add(1, tag);
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                await RecordFailureAsync(connection, transaction, table, message, exception, settings, tag, cancellationToken);
-            }
+            var integrationEvent = registry.Deserialize(message.Type, message.Payload);
+            await eventBus.PublishAsync(integrationEvent, message.TraceParent, cancellationToken);
+            await ExecuteAsync(
+                $"update {table} set status = 'processed', processed_at = @Now, locked_until = null, error = null where id = @Id",
+                new { Now = timeProvider.GetUtcNow(), message.Id },
+                cancellationToken);
+            Telemetry.OutboxProcessed.Add(1, tag);
         }
-
-        await transaction.CommitAsync(cancellationToken);
-        return messages.Count;
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            await RecordFailureAsync(table, message, exception, settings, tag, cancellationToken);
+        }
     }
 
     private async Task RecordFailureAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
         string table,
         OutboxRow message,
         Exception exception,
@@ -105,16 +117,15 @@ public sealed class OutboxProcessor(
         var attempts = message.Attempts + 1;
         var dead = attempts >= settings.MaxAttempts;
         var nextAttemptAt = timeProvider.GetUtcNow() + Backoff(attempts, settings);
-        await connection.ExecuteAsync(new CommandDefinition(
+        await ExecuteAsync(
             $"""
             update {table}
-            set attempts = @Attempts, error = @Error, next_attempt_at = @NextAttemptAt,
+            set attempts = @Attempts, error = @Error, next_attempt_at = @NextAttemptAt, locked_until = null,
                 status = case when @Dead then 'dead' else 'pending' end
             where id = @Id
             """,
             new { Attempts = attempts, Error = Truncate(exception.ToString()), NextAttemptAt = nextAttemptAt, Dead = dead, message.Id },
-            transaction,
-            cancellationToken: cancellationToken));
+            cancellationToken);
 
         if (dead)
         {
@@ -128,6 +139,12 @@ public sealed class OutboxProcessor(
         }
     }
 
+    private async Task ExecuteAsync(string sql, object parameters, CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql, parameters, cancellationToken: cancellationToken));
+    }
+
     private static TimeSpan Backoff(int attempts, OutboxOptions settings)
     {
         var seconds = Math.Min(settings.BaseDelaySeconds * Math.Pow(2, attempts - 1), settings.MaxDelaySeconds);
@@ -136,6 +153,19 @@ public sealed class OutboxProcessor(
 
     private static string Truncate(string value) => value.Length <= MaxErrorLength ? value : value[..MaxErrorLength];
 
-    /// <summary>Dapper projection of a claimed outbox row (constructor order matches the select list).</summary>
-    private sealed record OutboxRow(Guid Id, string Type, string Payload, int Attempts);
+    /// <summary>Dapper projection of a claimed outbox row.</summary>
+    private sealed class OutboxRow
+    {
+        public Guid Id { get; init; }
+
+        public string Type { get; init; } = string.Empty;
+
+        public string Payload { get; init; } = string.Empty;
+
+        public int Attempts { get; init; }
+
+        public string? TraceParent { get; init; }
+
+        public DateTimeOffset OccurredAt { get; init; }
+    }
 }

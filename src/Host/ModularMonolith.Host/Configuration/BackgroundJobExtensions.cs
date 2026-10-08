@@ -31,11 +31,11 @@ internal static class BackgroundJobExtensions
         return builder;
     }
 
-    /// <summary>Maps the Hangfire dashboard, restricted to the <c>admin</c> role.</summary>
+    /// <summary>Maps the Hangfire dashboard (cross-tenant), restricted to platform operators.</summary>
     public static WebApplication MapJobDashboard(this WebApplication app)
     {
         app.MapHangfireDashboardWithAuthorizationPolicy(
-            SecurityExtensions.AdminPolicy,
+            SecurityExtensions.OperatorPolicy,
             "/hangfire",
             new DashboardOptions { DashboardTitle = "ModularMonolith jobs", DisplayStorageConnectionString = false });
         return app;

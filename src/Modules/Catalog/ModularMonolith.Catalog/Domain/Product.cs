@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using ModularMonolith.Shared.Kernel.Domain;
 using ModularMonolith.Shared.Kernel.Results;
 
@@ -6,13 +5,15 @@ namespace ModularMonolith.Catalog.Domain;
 
 /// <summary>
 /// Product aggregate. Invariants live here (not only in validators), so an invalid product
-/// cannot be constructed from any entry point: HTTP, message handler or test.
+/// cannot be constructed or changed from any entry point: HTTP, message handler or test.
+/// Identity and the meaningful primitives are value objects (<see cref="ProductId"/>, <see cref="Sku"/>,
+/// <see cref="Money"/>, <see cref="SellerId"/>).
 /// </summary>
-internal sealed partial class Product : AggregateRoot
+internal sealed class Product : AggregateRoot<ProductId>
 {
     public const int MaxNameLength = 200;
 
-    private Product(Guid id, string name, string sku, Money price, string sellerId)
+    private Product(ProductId id, string name, Sku sku, Money price, SellerId sellerId)
         : base(id)
     {
         Name = name;
@@ -23,15 +24,15 @@ internal sealed partial class Product : AggregateRoot
 
     public string Name { get; }
 
-    public string Sku { get; }
+    public Sku Sku { get; }
 
-    public Money Price { get; }
+    public Money Price { get; private set; }
 
     /// <summary>Gets the subject id of the user who listed the product.</summary>
-    public string SellerId { get; }
+    public SellerId SellerId { get; }
 
     /// <summary>Creates a product and raises <see cref="ProductCreatedDomainEvent"/>.</summary>
-    public static Result<Product> Create(string? name, string? sku, decimal amount, string? currency, string sellerId, DateTimeOffset now)
+    public static Result<Product> Create(string? name, string? sku, decimal amount, string? currency, SellerId sellerId, DateTimeOffset now)
     {
         var trimmedName = name?.Trim();
         if (string.IsNullOrEmpty(trimmedName) || trimmedName.Length > MaxNameLength)
@@ -39,10 +40,10 @@ internal sealed partial class Product : AggregateRoot
             return Result.Failure<Product>(CatalogErrors.NameInvalid);
         }
 
-        var normalizedSku = sku?.Trim().ToUpperInvariant();
-        if (normalizedSku is null || !SkuPattern().IsMatch(normalizedSku))
+        var validSku = Sku.Create(sku);
+        if (validSku.IsFailure)
         {
-            return Result.Failure<Product>(CatalogErrors.SkuInvalid);
+            return Result.Failure<Product>(validSku.Error);
         }
 
         var price = Money.Create(amount, currency);
@@ -51,19 +52,55 @@ internal sealed partial class Product : AggregateRoot
             return Result.Failure<Product>(price.Error);
         }
 
-        var product = new Product(Guid.CreateVersion7(now), trimmedName, normalizedSku, price.Value, sellerId);
+        var product = new Product(ProductId.New(now), trimmedName, validSku.Value, price.Value, sellerId);
         product.Raise(new ProductCreatedDomainEvent(
             Guid.CreateVersion7(now),
             now,
             product.Id,
             product.Name,
-            product.Sku,
+            product.Sku.Value,
             product.Price.Amount,
             product.Price.Currency,
-            product.SellerId));
+            product.SellerId.Value));
         return Result.Success(product);
     }
 
-    [GeneratedRegex("^[A-Z0-9][A-Z0-9-]{2,63}$", RegexOptions.CultureInvariant, matchTimeoutMilliseconds: 1000)]
-    private static partial Regex SkuPattern();
+    /// <summary>Rebuilds a product from storage (no events, no validation of historical data).</summary>
+    public static Product Rehydrate(
+        ProductId id,
+        string name,
+        string sku,
+        decimal amount,
+        string currency,
+        string sellerId,
+        int version,
+        string createdBy,
+        DateTimeOffset createdAt,
+        string? modifiedBy,
+        DateTimeOffset? modifiedAt)
+    {
+        var product = new Product(id, name, Sku.Create(sku).Value, Money.Create(amount, currency).Value, SellerId.Create(sellerId).Value);
+        product.RestorePersistedState(version, createdBy, createdAt, modifiedBy, modifiedAt);
+        return product;
+    }
+
+    /// <summary>Changes the price and raises <see cref="ProductPriceChangedDomainEvent"/>.</summary>
+    public Result ChangePrice(decimal amount, string? currency, DateTimeOffset now)
+    {
+        var price = Money.Create(amount, currency);
+        if (price.IsFailure)
+        {
+            return Result.Failure(price.Error);
+        }
+
+        if (price.Value == Price)
+        {
+            return Result.Success();
+        }
+
+        var previous = Price;
+        Price = price.Value;
+        Raise(new ProductPriceChangedDomainEvent(Guid.CreateVersion7(now), now, Id, previous.Amount, previous.Currency, Price.Amount, Price.Currency));
+        return Result.Success();
+    }
 }

@@ -1,5 +1,6 @@
 using Dapper;
 using Microsoft.Extensions.Options;
+using ModularMonolith.Catalog.Infrastructure;
 using ModularMonolith.Shared.Infrastructure.Caching;
 using ModularMonolith.Shared.Infrastructure.Data;
 using ModularMonolith.Shared.Kernel.Cqrs;
@@ -18,8 +19,6 @@ internal sealed class ListProductsQueryHandler(
     ICacheStore cache,
     IOptions<CatalogOptions> options) : IQueryHandler<ListProductsQuery, PagedResult<ProductListItem>>
 {
-    public const string CacheRegion = "catalog:products:list";
-
     private const string CountSql = "select count(*) from catalog.products where not is_deleted";
 
     // "order by name, id" keeps paging deterministic when names repeat.
@@ -36,9 +35,8 @@ internal sealed class ListProductsQueryHandler(
     public async Task<Result<PagedResult<ProductListItem>>> HandleAsync(ListProductsQuery query, CancellationToken cancellationToken)
     {
         var paging = query.Paging;
-        var page = await cache.GetOrCreateInRegionAsync(
-            CacheRegion,
-            $"page:{paging.Page}:size:{paging.PageSize}",
+        var page = await cache.GetOrCreateAsync(
+            CatalogCache.ProductListPage(paging.Page, paging.PageSize),
             async ct =>
             {
                 var connection = await session.GetConnectionAsync(ct);

@@ -5,7 +5,7 @@ using ModularMonolith.Catalog.Features.GetProduct;
 using ModularMonolith.Shared.Infrastructure.Idempotency;
 using ModularMonolith.Shared.Infrastructure.Web;
 using CreateProductHandler = ModularMonolith.Shared.Kernel.Cqrs.ICommandHandler<
-    ModularMonolith.Catalog.Features.CreateProduct.CreateProductCommand, System.Guid>;
+    ModularMonolith.Catalog.Features.CreateProduct.CreateProductCommand, ModularMonolith.Catalog.Domain.ProductId>;
 
 namespace ModularMonolith.Catalog.Features.CreateProduct;
 
@@ -20,7 +20,11 @@ internal sealed class CreateProductEndpoint(CreateProductHandler handler)
     {
         Post("catalog/products");
         Version(1);
-        Options(builder => builder.WithTags("Catalog").RequireRateLimiting(RateLimitPolicies.PerUser));
+        // Creating a product twice is costly: with a key, never process without duplicate protection.
+        Options(builder => builder
+            .WithTags("Catalog")
+            .RequireRateLimiting(RateLimitPolicies.PerUser)
+            .WithMetadata(IdempotencyPolicy.Critical));
         PreProcessor<IdempotencyPreProcessor<CreateProductRequest>>();
         PostProcessor<IdempotencyPostProcessor<CreateProductRequest, CreateProductResponse>>();
         Description(
@@ -50,8 +54,9 @@ internal sealed class CreateProductEndpoint(CreateProductHandler handler)
             return;
         }
 
-        HttpContext.Response.Headers.Location = GetProductEndpoint.LocationFor(result.Value);
-        await Send.ResponseAsync(new CreateProductResponse(result.Value), StatusCodes.Status201Created, ct);
+        var id = result.Value.Value;
+        HttpContext.Response.Headers.Location = GetProductEndpoint.LocationFor(id);
+        await Send.ResponseAsync(new CreateProductResponse(id), StatusCodes.Status201Created, ct);
     }
 }
 

@@ -6,7 +6,7 @@ namespace ModularMonolith.Identity.Domain;
 internal sealed record UserRegisteredDomainEvent(
     Guid EventId,
     DateTimeOffset OccurredAt,
-    Guid UserProfileId,
+    UserProfileId UserProfileId,
     string SubjectId,
     string Email,
     string DisplayName) : IDomainEvent;

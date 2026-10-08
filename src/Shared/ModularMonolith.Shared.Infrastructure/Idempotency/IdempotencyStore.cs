@@ -1,4 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using ModularMonolith.Shared.Infrastructure.Caching;
 using ModularMonolith.Shared.Infrastructure.Serialization;
 using StackExchange.Redis;
 
@@ -7,15 +10,24 @@ namespace ModularMonolith.Shared.Infrastructure.Idempotency;
 /// <summary>
 /// Valkey-backed idempotency records. A key is claimed atomically (<c>SET NX</c>), completed with
 /// the response on success, and released on failure so that the client may retry.
+/// Record keys are <c>mm:idempotency:v1:{tenant}:{sha256(user, method, path, client key)}</c>:
+/// the client-supplied key never appears verbatim.
 /// </summary>
-internal sealed class IdempotencyStore(IConnectionMultiplexer connection)
+public sealed class IdempotencyStore(ValkeyConnection valkey)
 {
     private static readonly TimeSpan InFlightExpiry = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan CompletedExpiry = TimeSpan.FromHours(24);
 
-    public async Task<IdempotencyBeginResult> BeginAsync(string key, string fingerprint)
+    internal static string BuildKey(string tenant, string user, string method, string path, string clientKey)
     {
-        var database = connection.GetDatabase();
+        var material = string.Join('\n', user, method, path, clientKey);
+        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+        return $"{CacheKeyFactory.Prefix}:idempotency:v1:{tenant}:{hash}";
+    }
+
+    internal async Task<IdempotencyBeginResult> BeginAsync(string key, string fingerprint)
+    {
+        var database = valkey.Multiplexer.GetDatabase();
         var inFlight = JsonSerializer.Serialize(new IdempotencyRecord(fingerprint, null, null), JsonDefaults.Options);
 
         // Two attempts handle the race where the existing key expires between SET NX and GET.
@@ -46,13 +58,13 @@ internal sealed class IdempotencyStore(IConnectionMultiplexer connection)
         return IdempotencyBeginResult.InProgress;
     }
 
-    public Task CompleteAsync(string key, string fingerprint, int statusCode, string body)
-        => connection.GetDatabase().StringSetAsync(
+    internal Task CompleteAsync(string key, string fingerprint, int statusCode, string body)
+        => valkey.Multiplexer.GetDatabase().StringSetAsync(
             key,
             JsonSerializer.Serialize(new IdempotencyRecord(fingerprint, statusCode, body), JsonDefaults.Options),
             CompletedExpiry);
 
-    public Task ReleaseAsync(string key) => connection.GetDatabase().KeyDeleteAsync(key);
+    internal Task ReleaseAsync(string key) => valkey.Multiplexer.GetDatabase().KeyDeleteAsync(key);
 
     private sealed record IdempotencyRecord(string Fingerprint, int? StatusCode, string? Body);
 }

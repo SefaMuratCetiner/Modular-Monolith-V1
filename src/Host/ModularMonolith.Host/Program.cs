@@ -23,7 +23,8 @@ builder.Services.AddSharedInfrastructure(builder.Configuration, modules);
 builder.Services.AddFeatureManagement();
 builder.Services.AddFastEndpoints(options =>
 {
-    options.Assemblies = modules.Select(module => module.Assembly);
+    // Module endpoints plus the host's own operator endpoints (Operations/).
+    options.Assemblies = [.. modules.Select(module => module.Assembly), typeof(ApiConventions).Assembly];
     options.DisableAutoDiscovery = true;
 });
 if (builder.Environment.IsDevelopment())
@@ -56,7 +57,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapDefaultEndpoints();                  // /health/live, /health/ready, /metrics (anonymous)
-app.MapJobDashboard();                      // /hangfire (admin role)
+app.MapJobDashboard();                      // /hangfire (operator role)
 
 await app.Services.InitializeModulesAsync(app.Lifetime.ApplicationStopping);
 await app.RunAsync();

@@ -5,7 +5,8 @@ using Refit;
 namespace ModularMonolith.Catalog.Infrastructure.ExchangeRates;
 
 /// <summary>
-/// Anti-corruption layer over the external exchange-rate API with Valkey caching.
+/// Anti-corruption layer over the external exchange-rate API with Valkey caching. Rates are the same
+/// for every tenant, so they live in a shared (not tenant-scoped) cache region.
 /// Returns <see langword="null"/> when no rate is available instead of leaking HTTP failures.
 /// </summary>
 internal sealed class ExchangeRateProvider(
@@ -18,7 +19,7 @@ internal sealed class ExchangeRateProvider(
         try
         {
             var rates = await cache.GetOrCreateAsync(
-                $"catalog:exchange-rates:{fromCurrency}",
+                CatalogCache.ExchangeRatesFor(fromCurrency),
                 ct => api.GetLatestAsync(fromCurrency, ct),
                 TimeSpan.FromSeconds(options.Value.ExchangeRateCacheSeconds),
                 cancellationToken);

@@ -3,5 +3,6 @@
   "NameTooLong": "Product name must be at most {0} characters.",
   "SkuInvalid": "SKU must be 3-64 characters: letters, digits and dashes.",
   "PriceInvalid": "Price must be greater than zero.",
-  "CurrencyInvalid": "Currency must be a 3-letter ISO 4217 code."
+  "CurrencyInvalid": "Currency must be a 3-letter ISO 4217 code.",
+  "VersionInvalid": "Version must be the positive version number returned when the product was read."
 }

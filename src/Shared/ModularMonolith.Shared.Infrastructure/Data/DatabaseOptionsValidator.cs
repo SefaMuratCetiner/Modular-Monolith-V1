@@ -24,6 +24,11 @@ internal sealed class DatabaseOptionsValidator(IConfiguration configuration) : I
             failures.Add("ApplicationRole must be a lowercase SQL identifier (or empty).");
         }
 
+        if (options.TransientRetries is < 0 or > 5)
+        {
+            failures.Add("TransientRetries must be between 0 and 5.");
+        }
+
         return OptionsValidation.ToResult(DatabaseOptions.SectionName, failures);
     }
 }

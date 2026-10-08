@@ -8,7 +8,15 @@ namespace ModularMonolith.Catalog.Infrastructure;
 /// </summary>
 internal interface IProductRepository
 {
-    Task<bool> SkuExistsAsync(string sku, CancellationToken cancellationToken);
+    Task<bool> SkuExistsAsync(Sku sku, CancellationToken cancellationToken);
+
+    Task<Product?> GetAsync(ProductId id, CancellationToken cancellationToken);
 
     Task AddAsync(Product product, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Persists a price change if the stored version still equals <c>product.Version</c>.
+    /// </summary>
+    /// <returns><see langword="false"/> when another request changed the product first (optimistic concurrency).</returns>
+    Task<bool> UpdatePriceAsync(Product product, CancellationToken cancellationToken);
 }

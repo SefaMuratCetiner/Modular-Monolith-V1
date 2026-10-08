@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Http;
 using ModularMonolith.Shared.Infrastructure.Idempotency;
 using ModularMonolith.Shared.Infrastructure.Web;
 using RegisterUserHandler = ModularMonolith.Shared.Kernel.Cqrs.ICommandHandler<
-    ModularMonolith.Identity.Features.RegisterUser.RegisterUserCommand, System.Guid>;
+    ModularMonolith.Identity.Features.RegisterUser.RegisterUserCommand, ModularMonolith.Identity.Domain.UserProfileId>;
 
 namespace ModularMonolith.Identity.Features.RegisterUser;
 
@@ -42,7 +42,7 @@ internal sealed class RegisterUserEndpoint(RegisterUserHandler handler)
         }
 
         HttpContext.Response.Headers.Location = "/api/v1/identity/users/me";
-        await Send.ResponseAsync(new RegisterUserResponse(result.Value), StatusCodes.Status201Created, ct);
+        await Send.ResponseAsync(new RegisterUserResponse(result.Value.Value), StatusCodes.Status201Created, ct);
     }
 }
 

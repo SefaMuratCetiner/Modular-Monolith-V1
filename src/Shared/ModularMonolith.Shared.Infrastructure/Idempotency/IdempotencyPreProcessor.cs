@@ -19,11 +19,14 @@ namespace ModularMonolith.Shared.Infrastructure.Idempotency;
 /// <item>Same key + same payload after completion: the stored response is replayed.</item>
 /// <item>Same key while the first request is running: 409 Conflict.</item>
 /// <item>Same key with a different payload: 422 Unprocessable Entity.</item>
+/// <item>Behaviour without a key or with the store down follows the endpoint's <see cref="IdempotencyPolicy"/>.</item>
 /// </list>
 /// Pair it with <see cref="IdempotencyPostProcessor{TRequest,TResponse}"/>.
+/// Processors are singletons: only singletons are constructor-injected; the scoped tenant and user
+/// are read from the request's services.
 /// </summary>
 /// <typeparam name="TRequest">The endpoint request type.</typeparam>
-public sealed class IdempotencyPreProcessor<TRequest> : IPreProcessor<TRequest>
+public sealed class IdempotencyPreProcessor<TRequest>(IdempotencyStore store, ILogger<IdempotencyStore> logger) : IPreProcessor<TRequest>
 {
     /// <summary>The request header name.</summary>
     public const string HeaderName = "Idempotency-Key";
@@ -31,7 +34,6 @@ public sealed class IdempotencyPreProcessor<TRequest> : IPreProcessor<TRequest>
     internal const string ItemKey = "__idempotency_claim";
 
     private const int MaxKeyLength = 100;
-
 
     /// <inheritdoc />
     public async Task PreProcessAsync(IPreProcessorContext<TRequest> context, CancellationToken ct)
@@ -43,10 +45,16 @@ public sealed class IdempotencyPreProcessor<TRequest> : IPreProcessor<TRequest>
             return;
         }
 
+        var policy = http.GetEndpoint()?.Metadata.GetMetadata<IdempotencyPolicy>() ?? IdempotencyPolicy.Default;
         var key = http.Request.Headers[HeaderName].ToString();
         if (string.IsNullOrWhiteSpace(key))
         {
-            return; // The header is optional; without it the request is processed normally.
+            if (policy.RequireKey)
+            {
+                await ProblemResponses.WriteAsync(http, StatusCodes.Status400BadRequest, "The idempotency key is missing.", $"This operation requires an {HeaderName} header.");
+            }
+
+            return;
         }
 
         if (key.Length > MaxKeyLength)
@@ -55,27 +63,37 @@ public sealed class IdempotencyPreProcessor<TRequest> : IPreProcessor<TRequest>
             return;
         }
 
-        var services = http.RequestServices;
-        var tenant = services.GetRequiredService<ITenantContext>();
-        var user = services.GetRequiredService<ICurrentUser>();
-        var scopedKey = $"idempotency:{(tenant.IsResolved ? tenant.TenantId : "-")}:{user.AuditId}:{http.Request.Method}:{http.Request.Path}:{key}";
+        var tenant = http.RequestServices.GetRequiredService<ITenantContext>();
+        var user = http.RequestServices.GetRequiredService<ICurrentUser>();
+        var recordKey = IdempotencyStore.BuildKey(tenant.IsResolved ? tenant.TenantId : "-", user.AuditId, http.Request.Method, http.Request.Path, key);
         var fingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(context.Request, JsonDefaults.Options)));
 
         IdempotencyBeginResult begin;
         try
         {
-            begin = await services.GetRequiredService<IdempotencyStore>().BeginAsync(scopedKey, fingerprint);
+            begin = await store.BeginAsync(recordKey, fingerprint);
         }
         catch (RedisException exception)
         {
-            services.GetRequiredService<ILogger<IdempotencyStore>>().IdempotencyUnavailable(exception);
+            logger.IdempotencyUnavailable(exception);
+            if (policy.FailClosed)
+            {
+                http.Response.Headers.RetryAfter = "5";
+                await ProblemResponses.WriteAsync(http, StatusCodes.Status503ServiceUnavailable, "Duplicate protection is unavailable.", "The request was not processed because duplicate protection is temporarily unavailable. Retry with the same key.");
+            }
+
             return;
         }
 
+        await HandleBeginAsync(http, begin, recordKey, fingerprint, ct);
+    }
+
+    private static async Task HandleBeginAsync(HttpContext http, IdempotencyBeginResult begin, string recordKey, string fingerprint, CancellationToken ct)
+    {
         switch (begin.State)
         {
             case IdempotencyState.Started:
-                http.Items[ItemKey] = new IdempotencyClaim(scopedKey, fingerprint);
+                http.Items[ItemKey] = new IdempotencyClaim(recordKey, fingerprint);
                 break;
             case IdempotencyState.Replay:
                 http.Response.StatusCode = begin.StatusCode;

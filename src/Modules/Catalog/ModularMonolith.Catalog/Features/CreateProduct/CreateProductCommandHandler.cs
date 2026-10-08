@@ -15,24 +15,30 @@ internal sealed class CreateProductCommandHandler(
     IProductRepository products,
     ICurrentUser currentUser,
     IFeatureManager featureManager,
-    TimeProvider timeProvider) : ICommandHandler<CreateProductCommand, Guid>
+    TimeProvider timeProvider) : ICommandHandler<CreateProductCommand, ProductId>
 {
-    public async Task<Result<Guid>> HandleAsync(CreateProductCommand command, CancellationToken cancellationToken)
+    public async Task<Result<ProductId>> HandleAsync(CreateProductCommand command, CancellationToken cancellationToken)
     {
         if (await featureManager.IsEnabledAsync(CatalogFeatures.WriteDisabled, cancellationToken))
         {
-            return Result.Failure<Guid>(CatalogErrors.WritesDisabled);
+            return Result.Failure<ProductId>(CatalogErrors.WritesDisabled);
         }
 
-        if (await products.SkuExistsAsync(command.Sku, cancellationToken))
+        var seller = SellerId.Create(currentUser.UserId);
+        if (seller.IsFailure)
         {
-            return Result.Failure<Guid>(CatalogErrors.SkuTaken);
+            return Result.Failure<ProductId>(seller.Error);
         }
 
-        var created = Product.Create(command.Name, command.Sku, command.Price, command.Currency, currentUser.AuditId, timeProvider.GetUtcNow());
+        var created = Product.Create(command.Name, command.Sku, command.Price, command.Currency, seller.Value, timeProvider.GetUtcNow());
         if (created.IsFailure)
         {
-            return Result.Failure<Guid>(created.Error);
+            return Result.Failure<ProductId>(created.Error);
+        }
+
+        if (await products.SkuExistsAsync(created.Value.Sku, cancellationToken))
+        {
+            return Result.Failure<ProductId>(CatalogErrors.SkuTaken);
         }
 
         await products.AddAsync(created.Value, cancellationToken);

@@ -15,6 +15,10 @@ public interface IUnitOfWork
     /// <param name="aggregate">The aggregate.</param>
     void Track(IHasDomainEvents aggregate);
 
+    /// <summary>Records a before/after snapshot that is written to the audit log with the command.</summary>
+    /// <param name="change">The change.</param>
+    void RecordChange(AuditChange change);
+
     /// <summary>Registers a callback that runs only after a successful commit (e.g. cache invalidation).</summary>
     /// <param name="callback">The callback.</param>
     void OnCommitted(Func<CancellationToken, Task> callback);

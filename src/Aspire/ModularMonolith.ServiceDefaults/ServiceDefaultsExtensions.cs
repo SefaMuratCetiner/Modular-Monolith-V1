@@ -12,7 +12,7 @@ using OpenTelemetry.Trace;
 namespace ModularMonolith.ServiceDefaults;
 
 /// <summary>
-/// Cross-cutting defaults for every runnable project.
+/// Cross-cutting defaults for every runnable project (resilience pipelines are per dependency, not global).
 /// <list type="bullet">
 /// <item>Traces: OTLP (Aspire dashboard or Tempo) plus an optional dedicated Tempo exporter.</item>
 /// <item>Metrics: one pipeline, scraped by Prometheus on <c>/metrics</c> (optionally also pushed via OTLP).</item>
@@ -41,11 +41,9 @@ public static class ServiceDefaultsExtensions
         builder.ConfigureOpenTelemetry();
         builder.Services.AddHealthChecks().AddCheck("self", () => HealthCheckResult.Healthy(), ["live"]);
         builder.Services.AddServiceDiscovery();
-        builder.Services.ConfigureHttpClientDefaults(http =>
-        {
-            http.AddStandardResilienceHandler();
-            http.AddServiceDiscovery();
-        });
+        // No global resilience pipeline: every outbound dependency registers its own, with timeouts,
+        // retries and circuit breaking sized for that dependency (see the module registrations).
+        builder.Services.ConfigureHttpClientDefaults(http => http.AddServiceDiscovery());
         return builder;
     }
 

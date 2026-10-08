@@ -9,7 +9,7 @@ namespace ModularMonolith.Catalog.Domain;
 internal sealed record ProductCreatedDomainEvent(
     Guid EventId,
     DateTimeOffset OccurredAt,
-    Guid ProductId,
+    ProductId ProductId,
     string Name,
     string Sku,
     decimal Price,
