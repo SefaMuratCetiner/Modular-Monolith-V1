@@ -1,0 +1,9 @@
+# Prometheus scrape config for Aspire: the API runs on the host (launch profile port 5080).
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: modular-monolith-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: [ "host.docker.internal:5080" ]

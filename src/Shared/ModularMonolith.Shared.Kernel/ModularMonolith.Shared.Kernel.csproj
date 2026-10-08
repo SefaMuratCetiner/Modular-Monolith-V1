@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Pure building blocks: no infrastructure, web or database dependencies are allowed here. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>ModularMonolith.Shared.Kernel</RootNamespace>
+  </PropertyGroup>
+
+</Project>

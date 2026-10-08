@@ -1,0 +1,40 @@
+### Local smoke requests (VS / Rider / VS Code REST Client).
+### 1) Get a token for the demo user "alice" (tenant "acme", role "admin") from the dev realm.
+###    Direct access grants are enabled on the dev-only "modular-monolith-cli" client.
+@host = http://localhost:5080
+@keycloak = http://localhost:8080/realms/modular-monolith
+
+# @name token
+POST {{keycloak}}/protocol/openid-connect/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=password&client_id=modular-monolith-cli&username=alice&password=alice&scope=openid
+
+###
+@accessToken = {{token.response.body.access_token}}
+
+### Register the caller's profile (publishes UserRegisteredIntegrationEvent -> Catalog sellers)
+POST {{host}}/api/v1/identity/users/me
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+Idempotency-Key: register-alice-1
+
+{ "email": "alice@acme.test", "displayName": "Alice" }
+
+### Create a product (idempotent)
+POST {{host}}/api/v1/catalog/products
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+Idempotency-Key: create-widget-1
+
+{ "name": "Widget", "sku": "WID-001", "price": 19.99, "currency": "USD" }
+
+### List products of the caller's tenant
+GET {{host}}/api/v1/catalog/products
+Authorization: Bearer {{accessToken}}
+
+### Health and metrics (anonymous)
+GET {{host}}/health/ready
+
+###
+GET {{host}}/metrics

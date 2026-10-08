@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "ModularMonolith contributors",
+  "classifications": [ "Web", "ASP.NET Core", "Modular Monolith", "Vertical Slice", "Aspire" ],
+  "identity": "ModularMonolith.V1.Template",
+  "name": "ASP.NET Core Modular Monolith (vertical slices, RLS multi-tenancy, outbox)",
+  "shortName": "modular-monolith",
+  "sourceName": "ModularMonolith",
+  "preferNameDirectory": true,
+  "tags": {
+    "language": "C#",
+    "type": "solution"
+  },
+  "sources": [
+    {
+      "modifiers": [
+        {
+          "exclude": [ "**/bin/**", "**/obj/**", "**/.vs/**", "**/.idea/**", ".template.config/**", "**/*.user" ]
+        }
+      ]
+    }
+  ]
+}

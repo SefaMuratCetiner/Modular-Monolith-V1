@@ -1,0 +1,5 @@
+# Local developer overrides (more verbose logging). Not used in CI.
+services:
+  api:
+    environment:
+      Serilog__MinimumLevel__Default: Debug

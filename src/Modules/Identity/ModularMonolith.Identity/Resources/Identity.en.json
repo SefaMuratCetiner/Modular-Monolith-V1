@@ -1,0 +1,5 @@
+{
+  "EmailInvalid": "A valid e-mail address is required.",
+  "DisplayNameRequired": "Display name is required.",
+  "DisplayNameTooLong": "Display name must be at most {0} characters."
+}

@@ -1,0 +1,7 @@
+{
+  "NameRequired": "Product name is required.",
+  "NameTooLong": "Product name must be at most {0} characters.",
+  "SkuInvalid": "SKU must be 3-64 characters: letters, digits and dashes.",
+  "PriceInvalid": "Price must be greater than zero.",
+  "CurrencyInvalid": "Currency must be a 3-letter ISO 4217 code."
+}

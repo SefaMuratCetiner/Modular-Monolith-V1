@@ -1,0 +1,21 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.3.5">
+
+  <!-- Local orchestration: PostgreSQL, Valkey, Keycloak, Grafana LGTM stack and the API host. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>ModularMonolith.AppHost</RootNamespace>
+    <UserSecretsId>modular-monolith-apphost</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.PostgreSQL" />
+    <PackageReference Include="Aspire.Hosting.Valkey" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Host\ModularMonolith.Host\ModularMonolith.Host.csproj" />
+  </ItemGroup>
+
+</Project>

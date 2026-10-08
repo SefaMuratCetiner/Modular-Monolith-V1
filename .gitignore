@@ -1,0 +1,18 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.userprefs
+.vs/
+.idea/
+.vscode/
+*.swp
+TestResults/
+coverage*/
+*.nupkg
+artifacts/
+
+## Local secrets / environment
+.env
+appsettings.*.local.json
