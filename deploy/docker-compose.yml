@@ -175,7 +175,7 @@ services:
         limits: { cpus: "0.50", memory: 512M }
 
   prometheus:
-    image: prom/prometheus:v3.5.0
+    image: prom/prometheus:v3.15.0
     ports:
       - "9090:9090"
     volumes:
