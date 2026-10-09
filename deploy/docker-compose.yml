@@ -138,7 +138,7 @@ services:
         limits: { cpus: "1.00", memory: 1G }
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.161.0
+    image: otel/opentelemetry-collector-contrib:0.162.0
     command: [ "--config=/etc/otelcol/config.yaml" ]
     ports:
       - "4317:4317"
