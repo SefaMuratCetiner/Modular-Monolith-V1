@@ -17,6 +17,8 @@ COPY src/Modules/Catalog/ModularMonolith.Catalog/*.csproj src/Modules/Catalog/Mo
 COPY src/Modules/Catalog/ModularMonolith.Catalog.Contracts/*.csproj src/Modules/Catalog/ModularMonolith.Catalog.Contracts/packages.lock.json src/Modules/Catalog/ModularMonolith.Catalog.Contracts/
 COPY src/Modules/Identity/ModularMonolith.Identity/*.csproj src/Modules/Identity/ModularMonolith.Identity/packages.lock.json src/Modules/Identity/ModularMonolith.Identity/
 COPY src/Modules/Identity/ModularMonolith.Identity.Contracts/*.csproj src/Modules/Identity/ModularMonolith.Identity.Contracts/packages.lock.json src/Modules/Identity/ModularMonolith.Identity.Contracts/
+COPY src/Modules/Privacy/ModularMonolith.Privacy/*.csproj src/Modules/Privacy/ModularMonolith.Privacy/packages.lock.json src/Modules/Privacy/ModularMonolith.Privacy/
+COPY src/Modules/Messaging/ModularMonolith.Messaging/*.csproj src/Modules/Messaging/ModularMonolith.Messaging/packages.lock.json src/Modules/Messaging/ModularMonolith.Messaging/
 COPY src/Aspire/ModularMonolith.ServiceDefaults/*.csproj src/Aspire/ModularMonolith.ServiceDefaults/packages.lock.json src/Aspire/ModularMonolith.ServiceDefaults/
 COPY src/Host/ModularMonolith.Host/*.csproj src/Host/ModularMonolith.Host/packages.lock.json src/Host/ModularMonolith.Host/
 RUN dotnet restore src/Host/ModularMonolith.Host/ModularMonolith.Host.csproj --locked-mode

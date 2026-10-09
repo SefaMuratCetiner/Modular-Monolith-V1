@@ -1,25 +1,25 @@
 using FastEndpoints;
-using ModularMonolith.Host.Configuration;
-using ModularMonolith.Shared.Infrastructure.Messaging;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using ModularMonolith.Shared.Infrastructure.Web;
+using RequeueDeadLettersHandler = ModularMonolith.Shared.Kernel.Cqrs.ICommandHandler<
+    ModularMonolith.Messaging.Features.RequeueDeadLetters.RequeueDeadLettersCommand, int>;
 
-namespace ModularMonolith.Host.Operations;
+namespace ModularMonolith.Messaging.Features.RequeueDeadLetters;
 
 /// <summary>
-/// <c>POST /api/v1/ops/outbox/{module}/dead-letters/requeue</c> (all) and
-/// <c>POST /api/v1/ops/outbox/{module}/dead-letters/{id}/requeue</c> (one), platform operators only.
-/// Replays dead-lettered messages after the cause is fixed; consumers are inbox-protected, so
-/// handlers that already succeeded are not run again.
+/// <c>POST /api/v1/messaging/{module}/dead-letters/requeue</c> (all) and
+/// <c>POST /api/v1/messaging/{module}/dead-letters/{id}/requeue</c> (one), platform operators only.
 /// </summary>
-internal sealed class RequeueDeadLettersEndpoint(OutboxAdministration administration)
+internal sealed class RequeueDeadLettersEndpoint(RequeueDeadLettersHandler handler)
     : Endpoint<RequeueDeadLettersRequest, RequeueDeadLettersResponse>
 {
     public override void Configure()
     {
-        Post("ops/outbox/{module}/dead-letters/requeue", "ops/outbox/{module}/dead-letters/{id:guid}/requeue");
+        Post("messaging/{module}/dead-letters/requeue", "messaging/{module}/dead-letters/{id:guid}/requeue");
         Version(1);
-        Policies(PlatformPermissions.OutboxReplay.Name);
-        Options(builder => builder.WithTags("Operations").RequireRateLimiting(RateLimitPolicies.PerUser));
+        Policies(MessagingPermissions.DeadLettersReplay.Name);
+        Options(builder => builder.WithTags("Messaging").RequireRateLimiting(RateLimitPolicies.PerUser));
         Description(
             builder => builder
                 .Produces<RequeueDeadLettersResponse>(StatusCodes.Status200OK)
@@ -30,7 +30,7 @@ internal sealed class RequeueDeadLettersEndpoint(OutboxAdministration administra
 
     public override async Task HandleAsync(RequeueDeadLettersRequest req, CancellationToken ct)
     {
-        var result = await administration.RequeueAsync(req.Module, req.Id, ct);
+        var result = await handler.HandleAsync(new RequeueDeadLettersCommand(req.Module, req.Id), ct);
         if (result.IsFailure)
         {
             await Send.ResultAsync(result.Error.ToProblem());

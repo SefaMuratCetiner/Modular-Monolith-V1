@@ -17,7 +17,7 @@
 param(
     [string] $Authority = "http://localhost:8080/realms/modular-monolith",
     [string] $ClientId = "modular-monolith-cli",
-    # Optional scopes to request on top of the client's defaults (catalog.read, identity.read, profile, email).
+    # Optional scopes to request on top of the client's defaults (catalog.read, identity.read, privacy.read, profile, email).
     [string] $Scope = "catalog.write identity.write"
 )
 

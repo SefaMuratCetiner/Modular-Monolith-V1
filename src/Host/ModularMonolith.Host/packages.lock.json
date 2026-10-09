@@ -604,6 +604,23 @@
           "ModularMonolith.Shared.Kernel": "[1.0.0, )"
         }
       },
+      "modularmonolith.messaging": {
+        "type": "Project",
+        "dependencies": {
+          "FastEndpoints": "[8.1.0, )",
+          "ModularMonolith.Shared.Infrastructure": "[1.0.0, )",
+          "ModularMonolith.Shared.Kernel": "[1.0.0, )"
+        }
+      },
+      "modularmonolith.privacy": {
+        "type": "Project",
+        "dependencies": {
+          "Dapper": "[2.1.79, )",
+          "FastEndpoints": "[8.1.0, )",
+          "ModularMonolith.Shared.Infrastructure": "[1.0.0, )",
+          "ModularMonolith.Shared.Kernel": "[1.0.0, )"
+        }
+      },
       "modularmonolith.servicedefaults": {
         "type": "Project",
         "dependencies": {

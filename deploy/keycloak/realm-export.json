@@ -369,12 +369,22 @@
     },
     {
       "name": "identity.read",
-      "description": "Read your profile and export your personal data",
+      "description": "Read your profile",
       "protocol": "openid-connect",
       "attributes": {
         "include.in.token.scope": "true",
         "display.on.consent.screen": "true",
-        "consent.screen.text": "Read your profile and export your personal data"
+        "consent.screen.text": "Read your profile"
+      }
+    },
+    {
+      "name": "privacy.read",
+      "description": "Export your personal data",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "true",
+        "consent.screen.text": "Export your personal data"
       }
     },
     {
@@ -484,7 +494,8 @@
         "acr",
         "web-origins",
         "catalog.read",
-        "identity.read"
+        "identity.read",
+        "privacy.read"
       ],
       "optionalClientScopes": [
         "catalog.write",
@@ -557,7 +568,8 @@
         "acr",
         "web-origins",
         "catalog.read",
-        "identity.read"
+        "identity.read",
+        "privacy.read"
       ],
       "optionalClientScopes": [
         "catalog.write",

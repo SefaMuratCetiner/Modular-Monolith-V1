@@ -6,6 +6,8 @@ using ModularMonolith.Host.Configuration;
 using ModularMonolith.Host.Migrations;
 using ModularMonolith.Host.OpenApi;
 using ModularMonolith.Identity;
+using ModularMonolith.Messaging;
+using ModularMonolith.Privacy;
 using ModularMonolith.ServiceDefaults;
 using ModularMonolith.Shared.Infrastructure;
 using ModularMonolith.Shared.Infrastructure.Modules;
@@ -18,7 +20,7 @@ if (args is [HealthProbeCommand.Name, ..])
 }
 
 // The modules composed into this host. This is the ONLY place the host knows about modules.
-IModule[] modules = [new CatalogModule(), new IdentityModule()];
+IModule[] modules = [new CatalogModule(), new IdentityModule(), new PrivacyModule(), new MessagingModule()];
 
 // `migrate`: apply database migrations with the schema owner's credentials and exit.
 // The serving application below never runs DDL.
@@ -41,8 +43,8 @@ builder.Services.AddSharedInfrastructure(builder.Configuration, modules);
 builder.Services.AddFeatureManagement();
 builder.Services.AddFastEndpoints(options =>
 {
-    // Module endpoints plus the host's own operator endpoints (Operations/).
-    options.Assemblies = [.. modules.Select(module => module.Assembly), typeof(ApiConventions).Assembly];
+    // Every endpoint lives in a module; the host has none.
+    options.Assemblies = [.. modules.Select(module => module.Assembly)];
     options.DisableAutoDiscovery = true;
 });
 

@@ -39,7 +39,7 @@ public sealed partial class IntegrationEventRegistry
         Contract[] contracts =
         [
             .. modules.Modules
-                .SelectMany(module => module.ContractsAssembly.GetExportedTypes())
+                .SelectMany(module => module.ContractsAssembly?.GetExportedTypes() ?? [])
                 .Where(type => type is { IsClass: true, IsAbstract: false } && typeof(IIntegrationEvent).IsAssignableFrom(type))
                 .Select(type => new Contract(type, ContractOf(type))),
         ];

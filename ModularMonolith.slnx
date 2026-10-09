@@ -26,6 +26,12 @@
     <Project Path="src/Modules/Identity/ModularMonolith.Identity/ModularMonolith.Identity.csproj" />
     <Project Path="src/Modules/Identity/ModularMonolith.Identity.Contracts/ModularMonolith.Identity.Contracts.csproj" />
   </Folder>
+  <Folder Name="/src/Modules/Messaging/">
+    <Project Path="src/Modules/Messaging/ModularMonolith.Messaging/ModularMonolith.Messaging.csproj" />
+  </Folder>
+  <Folder Name="/src/Modules/Privacy/">
+    <Project Path="src/Modules/Privacy/ModularMonolith.Privacy/ModularMonolith.Privacy.csproj" />
+  </Folder>
   <Folder Name="/src/Shared/">
     <Project Path="src/Shared/ModularMonolith.Shared.Infrastructure/ModularMonolith.Shared.Infrastructure.csproj" />
     <Project Path="src/Shared/ModularMonolith.Shared.Kernel/ModularMonolith.Shared.Kernel.csproj" />

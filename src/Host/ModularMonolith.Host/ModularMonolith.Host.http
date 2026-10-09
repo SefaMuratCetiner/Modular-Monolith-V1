@@ -4,7 +4,7 @@
 @host = http://localhost:5080
 @keycloak = http://localhost:8080/realms/modular-monolith
 
-### 1) Request a device code. Default scopes: catalog.read, identity.read; the write and operator scopes are optional.
+### 1) Request a device code. Default scopes: catalog.read, identity.read, privacy.read; the write and operator scopes are optional.
 # @name device
 POST {{keycloak}}/protocol/openid-connect/auth/device
 Content-Type: application/x-www-form-urlencoded
@@ -73,11 +73,11 @@ GET {{host}}/api/v1/catalog/products/{{productId}}/price?currency=EUR
 Authorization: Bearer {{accessToken}}
 
 ### Operators (role operator + scope platform.ops): inspect and replay dead-lettered outbox messages
-GET {{host}}/api/v1/ops/outbox/catalog/dead-letters?page=1&pageSize=20
+GET {{host}}/api/v1/messaging/catalog/dead-letters?page=1&pageSize=20
 Authorization: Bearer {{accessToken}}
 
 ###
-POST {{host}}/api/v1/ops/outbox/catalog/dead-letters/requeue
+POST {{host}}/api/v1/messaging/catalog/dead-letters/requeue
 Authorization: Bearer {{accessToken}}
 
 ### Personal data: export everything the application stores about the caller (GDPR Art. 15/20)

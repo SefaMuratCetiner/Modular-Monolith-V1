@@ -104,9 +104,18 @@ flowchart LR
 |---|---|
 | `Shared.Kernel` | nothing (pure C#) |
 | `Shared.Infrastructure` | Kernel |
-| `<Module>.Contracts` | Kernel only, as public versioned integration events |
+| `<Module>.Contracts` | Kernel only, as public versioned integration events (only modules that publish events have one) |
 | `<Module>` | Kernel, Shared.Infrastructure, its own Contracts, **other modules' Contracts only** |
-| `Host` | Shared.Infrastructure, ServiceDefaults, module projects (it only uses `IModule` entry points) |
+| `Host` | Shared.Infrastructure, ServiceDefaults, module projects (it only uses `IModule` entry points). It is the composition root only: **every endpoint lives in a module** |
+
+| Module | Owns |
+|---|---|
+| Catalog | products, prices, the sellers projection |
+| Identity | user profiles, registration, erasure (including the Keycloak account) |
+| Privacy | data-subject requests: the personal-data export across all modules (through `IPersonalDataExporter`), with a request log |
+| Messaging | operator tooling for message delivery: today the dead-letter queue (dead-lettered outbox messages of every module, across tenants, through the outbox's administration API); later e.g. backlog views or a broker relay |
+
+Privacy and Messaging reach other modules only through Shared abstractions (`IPersonalDataExporter` in the Kernel, `OutboxAdministration` in Shared.Infrastructure), never through another module's project or tables.
 
 - Inside a module everything is `internal`. The single public type is the `IModule` entry point (`CatalogModule`, `IdentityModule`), so the compiler enforces module boundaries rather than convention.
 - **Contracts are separated from implementation.**
@@ -166,14 +175,12 @@ ModularMonolithV1/
     │   ├── ModularMonolith.AppHost/            # Program.cs: containers, parameters, wiring
     │   └── ModularMonolith.ServiceDefaults/    # OTel, health endpoints, service discovery
     ├── Host/ModularMonolith.Host/
-    │   ├── Program.cs                          # composition root (module list lives here)
-    │   ├── Configuration/                      # HttpPlatform, Security (+ PlatformPermissions), Logging, BackgroundJobs,
+    │   ├── Program.cs                          # composition root (module list lives here); no endpoints
+    │   ├── Configuration/                      # HttpPlatform, Security, Logging, BackgroundJobs,
     │   │                                       # ApiConventions, SecurityHeadersMiddleware, TraceResponseHeadersMiddleware,
     │   │                                       # GracefulShutdown, KeyRing (Data Protection), SecretFiles (secret store),
     │   │                                       # HealthProbeCommand, PersonalData log masking,
     │   │                                       # *Options + *OptionsValidator
-    │   ├── Operations/                         # operator endpoints: outbox dead-letter list and replay
-    │   ├── Privacy/                            # personal-data export across modules
     │   ├── OpenApi/                            # `openapi [--check]` command (contract export)
     │   ├── Migrations/                         # `migrate` command, Hangfire schema step
     │   └── appsettings*.json  ModularMonolith.Host.http
@@ -241,6 +248,18 @@ ModularMonolithV1/
                 ├── Infrastructure/  UserProfileRepository, Keycloak/ (health check; admin API client with a cached
                 │                    service-account token), Migrations/001-005
                 └── Resources/Identity.en.json
+        ├── Privacy/                                 # no *.Contracts: publishes no integration events
+        │   └── ModularMonolith.Privacy/
+        │       ├── PrivacyModule.cs  PrivacyPermissions.cs
+        │       ├── Features/ExportPersonalData/   Endpoint, Command (recorded + audited), Handler (combines every
+        │       │                                  module's IPersonalDataExporter), PrivacyPersonalDataExporter
+        │       └── Infrastructure/Migrations/001_privacy.sql   # data_subject_requests + standard module tables
+        └── Messaging/                               # no *.Contracts: publishes no integration events
+            └── ModularMonolith.Messaging/
+                ├── MessagingModule.cs  MessagingPermissions.cs
+                ├── Features/ListDeadLetters/      Endpoint, Query, Handler (all modules, all tenants)
+                ├── Features/RequeueDeadLetters/   Endpoint, Command (audited), Handler
+                └── Infrastructure/Migrations/001_messaging.sql    # standard module tables (audit of operator actions)
 ```
 
 ---
@@ -516,7 +535,7 @@ if (!product.IsListedBy(currentUser.UserId) && !currentUser.IsInRole(AppRoles.Ad
 | All tenants drained | The outbox table has no RLS; each message carries `tenant_id`, and consumers run in a scope bound to it |
 | Retries | In-process retry (3), then exponential backoff (`next_attempt_at`), then `status = 'dead'` after `Outbox:MaxAttempts` |
 | Exactly-once effect per consumer | Inbox `(message_id, handler)` is inserted in the consumer's transaction; handlers that already succeeded are skipped on redelivery |
-| Dead letters | Inspect and replay with the operator endpoints `GET /api/v1/ops/outbox/{module}/dead-letters` and `POST .../dead-letters[/{id}]/requeue` |
+| Dead letters | Inspect and replay with the operator endpoints `GET /api/v1/messaging/{module}/dead-letters` and `POST .../dead-letters[/{id}]/requeue` |
 | One trace end to end | The producer's W3C `traceparent` is stored with the message; consumer spans are its children |
 | Retention | Daily Hangfire job per module (`Retention:*`): delivered outbox rows after 7 days, dead letters after 30, inbox rows after 30; audit-log client IP addresses after 90 days and audit rows after 365 (see [Audit-log retention](#audit-log-retention)) |
 | Safe deserialization | Only types exported by registered `*.Contracts` assemblies can be loaded; there is no `dynamic` dispatch |
@@ -566,7 +585,7 @@ if (!product.IsListedBy(currentUser.UserId) && !currentUser.IsInRole(AppRoles.Ad
 | Layer | Rule | Where |
 |---|---|---|
 | Default | Every endpoint requires an authenticated user (fallback policy); `/health/*` and `/metrics` opt out | `SecurityExtensions` |
-| Permission | Each endpoint requires a named permission = a realm role **and** an OAuth scope in the token. Modules declare their own (`CatalogPermissions`, `IdentityPermissions`); the host declares `PlatformPermissions`. `AddPermissions` turns each one into a policy and validates names at startup | `Policies(...)` on the endpoint |
+| Permission | Each endpoint requires a named permission = a realm role **and** an OAuth scope in the token. Every module declares its own (`CatalogPermissions`, `IdentityPermissions`, `PrivacyPermissions`, `MessagingPermissions`); the host has none. `AddPermissions` turns each one into a policy and validates names at startup | `Policies(...)` on the endpoint |
 | Resource | Decisions that depend on the loaded entity, e.g. only the product's seller or a tenant admin may change its price (403 `catalog.not_product_owner`) | the handler |
 | Tenant | Row-level security limits every query to the token's tenant, so a permission never reaches another tenant's data | PostgreSQL |
 
@@ -578,10 +597,10 @@ if (!product.IsListedBy(currentUser.UserId) && !currentUser.IsInRole(AppRoles.Ad
 | `identity.profile.write` | `identity.write` | user | register, erase own profile |
 | `identity.users.read` | `identity.read` | admin | list the tenant's users |
 | `identity.users.erase` | `identity.write` | admin | erase a user of the tenant |
-| `privacy.personal-data.export` | `identity.read` | user | `GET privacy/me/personal-data` |
-| `platform.outbox.read`, `platform.outbox.replay` | `platform.ops` | operator | dead-letter endpoints |
+| `privacy.personal-data.export` | `privacy.read` | user | `GET privacy/me/personal-data` (Privacy module) |
+| `messaging.dead-letters.read`, `messaging.dead-letters.replay` | `platform.ops` | operator | dead-letter endpoints (Messaging module) |
 
-Clients get the read scopes by default; `catalog.write`, `identity.write` and `platform.ops` are optional scopes that a client must request explicitly. The Hangfire dashboard uses a browser session without scopes and is role-based (`operator`). Operators need MFA for it.
+Clients get the read scopes (`catalog.read`, `identity.read`, `privacy.read`) by default; `catalog.write`, `identity.write` and `platform.ops` are optional scopes that a client must request explicitly. The Hangfire dashboard uses a browser session without scopes and is role-based (`operator`). Operators need MFA for it.
 
 ### Keycloak realm hardening (`deploy/keycloak/realm-export.json`)
 
@@ -757,7 +776,7 @@ Compose also defines CPU and memory limits for every service and a readiness hea
 
 ### … a module
 
-1. Create `src/Modules/<Name>/ModularMonolith.<Name>` and `ModularMonolith.<Name>.Contracts`. Copy a csproj; reference Kernel, Shared.Infrastructure and only other modules' `*.Contracts`.
+1. Create `src/Modules/<Name>/ModularMonolith.<Name>`, plus `ModularMonolith.<Name>.Contracts` if the module publishes integration events (otherwise `ContractsAssembly` returns `null`, like Privacy and Messaging). Copy a csproj; reference Kernel, Shared.Infrastructure and only other modules' `*.Contracts`.
 2. Add a public `<Name>Module : IModule` with a unique `Schema`, and an internal `<Name>Permissions` class registered with `services.AddPermissions(...)` in `AddServices` (add its scopes to the Keycloak clients).
 3. Add `Infrastructure/Migrations/001_<name>.sql` with the tables. Include `tenant_id`, `version` and the RLS policy, plus `outbox_messages`, `inbox_messages` and `audit_log` with the columns of Catalog's `001` and `002` scripts, and explicit grants to `$app_role$` like Catalog's `003` script (no schema-wide grants), and the audit-retention function of Catalog's `005` script. Never edit an applied migration; add the next numbered script instead.
 4. Add `new <Name>Module()` to the module list in `Host/Program.cs` and a project reference in the Host csproj.

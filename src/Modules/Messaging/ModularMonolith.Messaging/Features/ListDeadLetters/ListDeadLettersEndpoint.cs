@@ -1,24 +1,26 @@
 using FastEndpoints;
-using ModularMonolith.Host.Configuration;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using ModularMonolith.Shared.Infrastructure.Messaging;
 using ModularMonolith.Shared.Infrastructure.Web;
+using ModularMonolith.Shared.Kernel.Cqrs;
 using ModularMonolith.Shared.Kernel.Paging;
 
-namespace ModularMonolith.Host.Operations;
+namespace ModularMonolith.Messaging.Features.ListDeadLetters;
 
 /// <summary>
-/// <c>GET /api/v1/ops/outbox/{module}/dead-letters?page=1&amp;pageSize=20</c> (platform operators only).
+/// <c>GET /api/v1/messaging/{module}/dead-letters?page=1&amp;pageSize=20</c> (platform operators only).
 /// Lists dead-lettered outbox messages of a module across all tenants; payloads are not exposed.
 /// </summary>
-internal sealed class ListDeadLettersEndpoint(OutboxAdministration administration)
+internal sealed class ListDeadLettersEndpoint(IQueryHandler<ListDeadLettersQuery, PagedResult<DeadLetter>> handler)
     : Endpoint<ListDeadLettersRequest, PagedResult<DeadLetter>>
 {
     public override void Configure()
     {
-        Get("ops/outbox/{module}/dead-letters");
+        Get("messaging/{module}/dead-letters");
         Version(1);
-        Policies(PlatformPermissions.OutboxRead.Name);
-        Options(builder => builder.WithTags("Operations").RequireRateLimiting(RateLimitPolicies.PerUser));
+        Policies(MessagingPermissions.DeadLettersRead.Name);
+        Options(builder => builder.WithTags("Messaging").RequireRateLimiting(RateLimitPolicies.PerUser));
         Description(
             builder => builder
                 .Produces<PagedResult<DeadLetter>>(StatusCodes.Status200OK)
@@ -36,7 +38,7 @@ internal sealed class ListDeadLettersEndpoint(OutboxAdministration administratio
             return;
         }
 
-        var result = await administration.ListDeadLettersAsync(req.Module, paging.Value, ct);
+        var result = await handler.HandleAsync(new ListDeadLettersQuery(req.Module, paging.Value), ct);
         if (result.IsFailure)
         {
             await Send.ResultAsync(result.Error.ToProblem());

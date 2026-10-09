@@ -31,6 +31,8 @@
     <ProjectReference Include="..\..\Shared\ModularMonolith.Shared.Infrastructure\ModularMonolith.Shared.Infrastructure.csproj" />
     <ProjectReference Include="..\..\Modules\Catalog\ModularMonolith.Catalog\ModularMonolith.Catalog.csproj" />
     <ProjectReference Include="..\..\Modules\Identity\ModularMonolith.Identity\ModularMonolith.Identity.csproj" />
+    <ProjectReference Include="..\..\Modules\Privacy\ModularMonolith.Privacy\ModularMonolith.Privacy.csproj" />
+    <ProjectReference Include="..\..\Modules\Messaging\ModularMonolith.Messaging\ModularMonolith.Messaging.csproj" />
   </ItemGroup>
 
 </Project>

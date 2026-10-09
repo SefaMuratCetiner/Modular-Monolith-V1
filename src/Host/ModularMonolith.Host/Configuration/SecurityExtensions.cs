@@ -19,7 +19,7 @@ namespace ModularMonolith.Host.Configuration;
 /// <item>Everything else (e.g. <c>/hangfire</c>): cookie session with OpenID Connect login (PKCE, public client).</item>
 /// <item>Authentication is required by default (fallback policy); health and metrics opt out explicitly.</item>
 /// <item>API endpoints require a <see cref="Permission"/>: a realm role plus an OAuth scope in the token.
-/// Modules register their own permissions; the host registers <see cref="PlatformPermissions"/>.</item>
+/// Every module registers its own permissions; the host has none (it has no endpoints).</item>
 /// <item>401, 403 and 429 responses carry RFC 9457 problem details; 429 also carries <c>Retry-After</c>.</item>
 /// </list>
 /// All settings come from validated options, so a missing authority stops the host at startup.
@@ -44,8 +44,6 @@ internal static class SecurityExtensions
         builder.Services.AddAuthorizationBuilder()
             .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build())
             .AddPolicy(OperatorPolicy, policy => policy.RequireAuthenticatedUser().RequireRole(AppRoles.Operator));
-
-        builder.Services.AddPermissions(PlatformPermissions.All);
 
         AddRateLimiting(builder.Services);
         return builder;

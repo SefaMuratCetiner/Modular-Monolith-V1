@@ -19,8 +19,11 @@ public interface IModule
     /// <summary>Gets the implementation assembly (endpoints, handlers, validators, migrations).</summary>
     Assembly Assembly { get; }
 
-    /// <summary>Gets the public contracts assembly (integration events other modules may consume).</summary>
-    Assembly ContractsAssembly { get; }
+    /// <summary>
+    /// Gets the public contracts assembly (integration events other modules may consume), or
+    /// <see langword="null"/> for a module that publishes no integration events (it has no <c>*.Contracts</c> project).
+    /// </summary>
+    Assembly? ContractsAssembly { get; }
 
     /// <summary>Registers module-specific services (options, repositories, HTTP clients).</summary>
     /// <param name="services">The service collection.</param>
