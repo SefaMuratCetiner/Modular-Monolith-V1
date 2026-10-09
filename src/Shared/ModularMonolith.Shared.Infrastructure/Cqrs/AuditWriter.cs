@@ -3,7 +3,7 @@ using System.Text.Json;
 using Dapper;
 using Microsoft.AspNetCore.Http;
 using ModularMonolith.Shared.Infrastructure.Data;
-using ModularMonolith.Shared.Infrastructure.Serialization;
+using ModularMonolith.Shared.Infrastructure.Privacy;
 using ModularMonolith.Shared.Kernel.Context;
 
 namespace ModularMonolith.Shared.Infrastructure.Cqrs;
@@ -12,6 +12,8 @@ namespace ModularMonolith.Shared.Infrastructure.Cqrs;
 /// Writes an audit row into the module's <c>audit_log</c> table inside the command transaction,
 /// so an audited change can never be committed without its audit record (and vice versa).
 /// Each row records who, what (command payload), before/after state, when, from where and the trace.
+/// Properties marked <c>[PersonalData]</c> are stored as <c>[redacted]</c>: the audit trail proves who
+/// changed what without becoming another copy of personal data that erasure would have to chase.
 /// </summary>
 internal sealed class AuditWriter(
     DbSession session,
@@ -38,10 +40,10 @@ internal sealed class AuditWriter(
                 Id = Guid.CreateVersion7(),
                 UserId = currentUser.AuditId,
                 Action = action,
-                Payload = JsonSerializer.Serialize(command, JsonDefaults.Options),
+                Payload = JsonSerializer.Serialize(command, PersonalDataRedaction.AuditOptions),
 
                 // Before/after state of every entity the command changed (null when nothing was recorded).
-                Changes = changes.Count == 0 ? null : JsonSerializer.Serialize(changes, JsonDefaults.Options),
+                Changes = changes.Count == 0 ? null : JsonSerializer.Serialize(changes, PersonalDataRedaction.AuditOptions),
                 OccurredAt = timeProvider.GetUtcNow(),
                 IpAddress = httpContextAccessor.HttpContext?.Connection.RemoteIpAddress?.ToString(),
                 TraceId = Activity.Current?.TraceId.ToString(),

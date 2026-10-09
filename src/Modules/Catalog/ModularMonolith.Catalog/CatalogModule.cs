@@ -8,6 +8,7 @@ using ModularMonolith.Catalog.Infrastructure;
 using ModularMonolith.Catalog.Infrastructure.ExchangeRates;
 using ModularMonolith.Shared.Infrastructure.Configuration;
 using ModularMonolith.Shared.Infrastructure.Modules;
+using ModularMonolith.Shared.Infrastructure.Security;
 using Refit;
 
 namespace ModularMonolith.Catalog;
@@ -35,6 +36,7 @@ public sealed class CatalogModule : IModule
     public void AddServices(IServiceCollection services, IConfiguration configuration)
     {
         services.AddValidatedOptions<CatalogOptions, CatalogOptionsValidator>(configuration, CatalogOptions.SectionName);
+        services.AddPermissions(CatalogPermissions.All);
 
         services.AddOptions<OutputCacheOptions>()
             .Configure<IOptions<CatalogOptions>>((outputCache, catalog) => outputCache.AddPolicy(

@@ -21,6 +21,7 @@ internal sealed class GetProductEndpoint(IQueryHandler<GetProductQuery, ProductD
     {
         Get("catalog/products/{id:guid}");
         Version(1);
+        Policies(CatalogPermissions.ProductsRead.Name);
         Options(builder => builder.WithTags("Catalog").RequireRateLimiting(RateLimitPolicies.PerUser));
         Description(
             builder => builder

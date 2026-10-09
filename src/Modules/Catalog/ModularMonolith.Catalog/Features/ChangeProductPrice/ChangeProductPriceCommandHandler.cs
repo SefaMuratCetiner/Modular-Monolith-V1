@@ -1,17 +1,26 @@
 using Microsoft.FeatureManagement;
 using ModularMonolith.Catalog.Domain;
 using ModularMonolith.Catalog.Infrastructure;
+using ModularMonolith.Shared.Infrastructure.Security;
+using ModularMonolith.Shared.Kernel.Context;
 using ModularMonolith.Shared.Kernel.Cqrs;
 using ModularMonolith.Shared.Kernel.Results;
 
 namespace ModularMonolith.Catalog.Features.ChangeProductPrice;
 
 /// <summary>
-/// Loads the aggregate, lets it enforce its invariants and saves it with an optimistic-concurrency
-/// check. A stale <c>ExpectedVersion</c> (or a concurrent writer) yields 409 instead of a lost update.
+/// Loads the aggregate, checks resource ownership, lets the aggregate enforce its invariants and saves it
+/// with an optimistic-concurrency check. A stale <c>ExpectedVersion</c> (or a concurrent writer) yields 409
+/// instead of a lost update.
+/// <para>
+/// Per-resource authorization: the endpoint's permission (<c>catalog.products.write</c>) only says the caller
+/// may change products in general; whether they may change <i>this</i> product depends on the product,
+/// so it is decided here: its seller or a tenant administrator (403 otherwise).
+/// </para>
 /// </summary>
 internal sealed class ChangeProductPriceCommandHandler(
     IProductRepository products,
+    ICurrentUser currentUser,
     IFeatureManager featureManager,
     TimeProvider timeProvider) : ICommandHandler<ChangeProductPriceCommand, int>
 {
@@ -26,6 +35,11 @@ internal sealed class ChangeProductPriceCommandHandler(
         if (product is null)
         {
             return Result.Failure<int>(CatalogErrors.ProductNotFound);
+        }
+
+        if (!product.IsListedBy(currentUser.UserId) && !currentUser.IsInRole(AppRoles.Admin))
+        {
+            return Result.Failure<int>(CatalogErrors.NotProductOwner);
         }
 
         if (product.Version != command.ExpectedVersion)

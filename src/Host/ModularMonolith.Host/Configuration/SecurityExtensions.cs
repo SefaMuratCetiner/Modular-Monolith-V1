@@ -18,16 +18,18 @@ namespace ModularMonolith.Host.Configuration;
 /// <item><c>/api/*</c> (or any request with a Bearer token): JWT bearer, audience-validated, 401 problem details on failure.</item>
 /// <item>Everything else (e.g. <c>/hangfire</c>): cookie session with OpenID Connect login (PKCE, public client).</item>
 /// <item>Authentication is required by default (fallback policy); health and metrics opt out explicitly.</item>
+/// <item>API endpoints require a <see cref="Permission"/>: a realm role plus an OAuth scope in the token.
+/// Modules register their own permissions; the host registers <see cref="PlatformPermissions"/>.</item>
 /// <item>401, 403 and 429 responses carry RFC 9457 problem details; 429 also carries <c>Retry-After</c>.</item>
 /// </list>
 /// All settings come from validated options, so a missing authority stops the host at startup.
 /// </summary>
 internal static class SecurityExtensions
 {
-    /// <summary>Tenant administrators (role <c>admin</c>).</summary>
-    public const string AdminPolicy = "tenant-admin";
-
-    /// <summary>Platform operators (role <c>operator</c>): cross-tenant tools such as Hangfire and dead-letter replay.</summary>
+    /// <summary>
+    /// Platform operators (role <c>operator</c>) signed in through the browser: the Hangfire dashboard.
+    /// Cookie sessions carry no OAuth scopes, so this is role-based; API endpoints use permissions.
+    /// </summary>
     public const string OperatorPolicy = "platform-operator";
 
     private const string SelectorScheme = "jwt-or-cookie";
@@ -41,8 +43,9 @@ internal static class SecurityExtensions
 
         builder.Services.AddAuthorizationBuilder()
             .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build())
-            .AddPolicy(AdminPolicy, policy => policy.RequireAuthenticatedUser().RequireRole(AppRoles.Admin))
             .AddPolicy(OperatorPolicy, policy => policy.RequireAuthenticatedUser().RequireRole(AppRoles.Operator));
+
+        builder.Services.AddPermissions(PlatformPermissions.All);
 
         AddRateLimiting(builder.Services);
         return builder;

@@ -15,5 +15,7 @@ internal static class IdentityErrors
 
     public static Error EmailTaken { get; } = Error.Conflict("identity.email_taken", "The e-mail address is already in use.");
 
+    public static Error UserNotFound { get; } = Error.NotFound("identity.user_not_found", "No profile exists for this user in the current tenant.");
+
     public static Error ProfileNotFound { get; } = Error.NotFound("identity.profile_not_found", "The current user has not registered yet.");
 }

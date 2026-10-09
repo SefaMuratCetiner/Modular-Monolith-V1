@@ -7,6 +7,13 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>ModularMonolith.AppHost</RootNamespace>
     <UserSecretsId>modular-monolith-apphost</UserSecretsId>
+    <!--
+      No lock file: the Aspire SDK adds orchestration and dashboard packages for the developer machine's
+      runtime identifier (e.g. Aspire.Hosting.Orchestration.win-x64), so a lock file written on Windows
+      fails locked restore on Linux. The AppHost is a local development tool and never deployed;
+      its versions are still pinned centrally in Directory.Packages.props.
+    -->
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
   </PropertyGroup>
 
   <ItemGroup>

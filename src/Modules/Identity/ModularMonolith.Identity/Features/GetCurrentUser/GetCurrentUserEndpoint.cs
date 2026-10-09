@@ -17,6 +17,7 @@ internal sealed class GetCurrentUserEndpoint(
     {
         Get("identity/users/me");
         Version(1);
+        Policies(IdentityPermissions.ProfileRead.Name);
         Options(builder => builder.WithTags("Identity").RequireRateLimiting(RateLimitPolicies.PerUser));
         Description(
             builder => builder

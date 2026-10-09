@@ -8,5 +8,4 @@ internal sealed record UserRegisteredDomainEvent(
     DateTimeOffset OccurredAt,
     UserProfileId UserProfileId,
     string SubjectId,
-    string Email,
     string DisplayName) : IDomainEvent;

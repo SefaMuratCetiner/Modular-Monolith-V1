@@ -84,6 +84,11 @@ internal sealed class Product : AggregateRoot<ProductId>
         return product;
     }
 
+    /// <summary>Gets a value indicating whether the user with this subject id listed the product (resource ownership).</summary>
+    /// <param name="subjectId">The caller's subject id, or <see langword="null"/> when anonymous.</param>
+    /// <returns><see langword="true"/> for the seller.</returns>
+    public bool IsListedBy(string? subjectId) => subjectId is not null && string.Equals(SellerId.Value, subjectId, StringComparison.Ordinal);
+
     /// <summary>Changes the price and raises <see cref="ProductPriceChangedDomainEvent"/>.</summary>
     public Result ChangePrice(decimal amount, string? currency, DateTimeOffset now)
     {

@@ -7,6 +7,7 @@ using ModularMonolith.Identity.Infrastructure;
 using ModularMonolith.Identity.Infrastructure.Keycloak;
 using ModularMonolith.Shared.Infrastructure.Configuration;
 using ModularMonolith.Shared.Infrastructure.Modules;
+using ModularMonolith.Shared.Infrastructure.Security;
 using Refit;
 
 namespace ModularMonolith.Identity;
@@ -34,6 +35,7 @@ public sealed class IdentityModule : IModule
         services.AddValidatedOptions<IdentityOptions, IdentityOptionsValidator>(configuration, IdentityOptions.SectionName)
             .PostConfigure(options => options.Authority ??= configuration["Authentication:Authority"]);
 
+        services.AddPermissions(IdentityPermissions.All);
         services.AddScoped<IUserProfileRepository, UserProfileRepository>();
         services.AddRefitClient<IKeycloakMetadataApi>()
             .ConfigureHttpClient((provider, client) =>

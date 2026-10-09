@@ -11,6 +11,12 @@ using ModularMonolith.Shared.Infrastructure;
 using ModularMonolith.Shared.Infrastructure.Modules;
 using Serilog;
 
+// `healthcheck`: container readiness probe for the shell-less (chiseled) image; nothing else is built.
+if (args is [HealthProbeCommand.Name, ..])
+{
+    return await HealthProbeCommand.RunAsync(args);
+}
+
 // The modules composed into this host. This is the ONLY place the host knows about modules.
 IModule[] modules = [new CatalogModule(), new IdentityModule()];
 
@@ -22,6 +28,7 @@ if (args is [MigrationCommand.Name, ..])
 }
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.AddSecretFiles();     // secret store: one file per key in /run/secrets (overrides all sources)
 
 builder.AddServiceDefaults();               // OpenTelemetry, health checks, resilient HttpClient
 builder.AddLogging();                       // Serilog -> console, Loki, OTLP

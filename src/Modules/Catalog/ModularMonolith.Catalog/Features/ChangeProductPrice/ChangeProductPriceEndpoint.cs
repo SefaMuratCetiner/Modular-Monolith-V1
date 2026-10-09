@@ -21,6 +21,7 @@ internal sealed class ChangeProductPriceEndpoint(ChangeProductPriceHandler handl
     {
         Put("catalog/products/{id:guid}/price");
         Version(1);
+        Policies(CatalogPermissions.ProductsWrite.Name);
         Options(builder => builder.WithTags("Catalog").RequireRateLimiting(RateLimitPolicies.PerUser));
         Description(
             builder => builder

@@ -31,16 +31,21 @@ dotnet user-secrets --project src/Aspire/ModularMonolith.AppHost set "Parameters
 dotnet user-secrets --project src/Aspire/ModularMonolith.AppHost set "Parameters:api-db-password" "<pick one>"
 dotnet run --project src/Aspire/ModularMonolith.AppHost      # runs "migrations" to completion, then starts "api"
 
-# Or run the host directly against your own PostgreSQL/Valkey/Keycloak (appsettings.Development.json):
+# Or run the host directly against your own PostgreSQL/Valkey/Keycloak. Connection strings with
+# passwords are never committed: init-secrets stores them in the host's user secrets (and deploy/secrets/).
+./deploy/init-secrets.ps1                                       # once (bash: deploy/init-secrets.sh)
 dotnet run --project src/Host/ModularMonolith.Host -- migrate   # schema owner: DDL, roles, grants; then exits
 dotnet run --project src/Host/ModularMonolith.Host              # least-privileged login: DML only
 
 # Export (or verify in CI with --check) the committed OpenAPI contract; nothing is started
 dotnet run --project src/Host/ModularMonolith.Host -- openapi docs/openapi/modular-monolith.v1.json
 
-# Or without Aspire (CI-like)
-copy deploy\.env.example deploy\.env   # then edit the passwords
+# Or without Aspire (CI-like): passwords become Docker secrets from deploy/secrets/ (git-ignored)
+./deploy/init-secrets.ps1
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.yml up --build
+
+# Get an access token (OAuth 2.0 device flow; opens the browser, prints the token)
+$token = ./scripts/get-token.ps1 -Scope "catalog.write identity.write"
 ```
 
 | Endpoint | Aspire | Compose |
@@ -50,17 +55,17 @@ docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.ym
 | Aspire dashboard | `https://localhost:15888` | n/a |
 | Keycloak | `http://localhost:8080` | `http://localhost:8080` |
 | Grafana / Prometheus / Loki / Tempo | see the Aspire dashboard | `:3000` / `:9090` / `:3100` / `:3200` |
-| Hangfire dashboard (role `admin`) | `/hangfire` | `/hangfire` |
+| Hangfire dashboard (role `operator`) | `/hangfire` | `/hangfire` |
 
-**Demo users** (dev realm only; the password is the username):
+**Demo users** (dev realm only). Passwords follow the realm's password policy. `admin` and `operator` imply OTP, so alice and carol enrol an authenticator app at their first login.
 
-| User | Tenant | Roles |
-|---|---|---|
-| `alice` | `acme` | user, admin, operator |
-| `bob` | `acme` | user |
-| `carol` | `globex` | user, admin |
+| User | Password | Tenant | Roles | MFA |
+|---|---|---|---|---|
+| `alice` | `Alice-Demo-Pass1!` | `acme` | user, admin, operator | TOTP |
+| `bob` | `Bob-Demo-Pass1!` | `acme` | user | no |
+| `carol` | `Carol-Demo-Pass1!` | `globex` | user, admin | TOTP |
 
-`src/Host/ModularMonolith.Host/ModularMonolith.Host.http` contains a ready-made token request and smoke calls.
+`src/Host/ModularMonolith.Host/ModularMonolith.Host.http` contains the device-flow token requests and smoke calls.
 
 ---
 
@@ -137,12 +142,17 @@ ModularMonolithV1/
 ├── Directory.Build.props            # nullable, warnings-as-errors, analyzers, docs
 ├── Directory.Packages.props         # central package management + security pins
 ├── .editorconfig                    # formatting, style, naming, analyzer severities
-├── global.json  NuGet.Config  Dockerfile  .dockerignore  LICENSE
+├── global.json  NuGet.Config        # SDK pin; nuget.org only, with package source mapping
+├── Dockerfile  .dockerignore  LICENSE  # chiseled runtime image, locked restore
+├── .github/dependabot.yml           # NuGet, Dockerfile and compose image updates
 ├── .template.config/template.json   # `dotnet new modular-monolith`
 ├── docs/openapi/                    # committed OpenAPI contract (modular-monolith.v1.json) + rules
+├── docs/privacy/personal-data.md    # personal-data inventory, export and erasure behaviour
+├── scripts/get-token.ps1            # device-flow access token for the dev realm
 ├── deploy/
 │   ├── docker-compose.yml  docker-compose.override.yml  .env.example
-│   ├── keycloak/realm-export.json   # realm, clients, tenant_id + roles mappers, demo users
+│   ├── init-secrets.ps1  init-secrets.sh   # random dev passwords -> deploy/secrets/ (git-ignored) + user secrets
+│   ├── keycloak/realm-export.json   # hardened realm: brute force, password policy, MFA flow, scopes, device flow
 │   ├── otel-collector/config.yaml   # OTLP in; memory limit, tail sampling, batching; traces -> Tempo, logs -> Loki
 │   └── grafana/
 │       ├── tempo.yaml  loki.yaml  prometheus.yaml  prometheus.aspire.yaml
@@ -153,11 +163,13 @@ ModularMonolithV1/
     │   └── ModularMonolith.ServiceDefaults/    # OTel, health endpoints, service discovery
     ├── Host/ModularMonolith.Host/
     │   ├── Program.cs                          # composition root (module list lives here)
-    │   ├── Configuration/                      # HttpPlatform, Security, Logging, BackgroundJobs, ApiConventions,
-    │   │                                       # SecurityHeadersMiddleware, TraceResponseHeadersMiddleware, GracefulShutdown,
-    │   │                                       # KeyRing (Data Protection),
+    │   ├── Configuration/                      # HttpPlatform, Security (+ PlatformPermissions), Logging, BackgroundJobs,
+    │   │                                       # ApiConventions, SecurityHeadersMiddleware, TraceResponseHeadersMiddleware,
+    │   │                                       # GracefulShutdown, KeyRing (Data Protection), SecretFiles (secret store),
+    │   │                                       # HealthProbeCommand, PersonalData log masking,
     │   │                                       # *Options + *OptionsValidator
     │   ├── Operations/                         # operator endpoints: outbox dead-letter list and replay
+    │   ├── Privacy/                            # personal-data export across modules
     │   ├── OpenApi/                            # `openapi [--check]` command (contract export)
     │   ├── Migrations/                         # `migrate` command, Hangfire schema step
     │   └── appsettings*.json  ModularMonolith.Host.http
@@ -167,7 +179,8 @@ ModularMonolithV1/
     │   │   ├── Results/     Result, Result<T>, Error, ValidationError, ErrorType
     │   │   ├── Paging/      PageRequest (validated), PagedResult<T>
     │   │   ├── Cqrs/        ICommand, IQuery, I*Handler, IDomainEventHandler
-    │   │   ├── Messaging/   IIntegrationEvent, IIntegrationEventHandler, IOutbox
+    │   │   ├── Messaging/   IIntegrationEvent, IIntegrationEventHandler, IOutbox, IntegrationEventAttribute
+    │   │   ├── Privacy/     [PersonalData], IPersonalDataExporter
     │   │   └── Context/     ITenantContext, ICurrentUser
     │   └── ModularMonolith.Shared.Infrastructure/
     │       ├── Configuration/  AddValidatedOptions (bind + IValidateOptions + ValidateOnStart)
@@ -182,7 +195,9 @@ ModularMonolithV1/
     │       │                   InProcessEventBus, Inbox decorator, OutboxAdministration (dead letters),
     │       │                   OutboxMetricsCollector, RetentionJob
     │       ├── Tenancy/        TenantContext, TenantResolutionMiddleware, TenancyOptions
-    │       ├── Security/       HttpCurrentUser, ClaimNames, AppRoles, PostgresXmlRepository (key ring store)
+    │       ├── Security/       Permission (+ requirement, handler, AddPermissions), HttpCurrentUser, ClaimNames,
+    │       │                   AppRoles, PostgresXmlRepository (key ring store)
+    │       ├── Privacy/        PersonalDataRedaction (audit serializer)
     │       ├── Caching/        ICacheStore, CacheRegion/CacheKey, CacheKeyFactory, ValkeyCacheStore (single-flight),
     │       │                   ValkeyConnection (async connect)
     │       ├── Idempotency/    FastEndpoints pre/post processors, IdempotencyPolicy, Valkey store
@@ -196,26 +211,29 @@ ModularMonolithV1/
         │   ├── ModularMonolith.Catalog.Contracts/   ProductCreatedIntegrationEvent
         │   └── ModularMonolith.Catalog/
         │       ├── CatalogModule.cs                 # the only public type
-        │       ├── CatalogOptions.cs  CatalogFeatures.cs  CatalogTelemetry.cs (business metrics)
+        │       ├── CatalogOptions.cs  CatalogFeatures.cs  CatalogPermissions.cs  CatalogTelemetry.cs (business metrics)
         │       ├── Domain/          Product, ProductId, Sku, Money, SellerId, domain events, CatalogErrors
         │       ├── Features/
         │       │   ├── CreateProduct/   Endpoint, Command, Handler, Validator, ProductCreatedDomainEventHandler
         │       │   ├── GetProduct/      Endpoint, Query (+ read model incl. version), Handler (target of 201 Location)
-        │       │   ├── ChangeProductPrice/ Endpoint, Command, Handler, Validator (optimistic concurrency)
+        │       │   ├── ChangeProductPrice/ Endpoint, Command, Handler (seller-or-admin check), Validator (optimistic concurrency)
         │       │   ├── ListProducts/    Endpoint, Query (+ read model), Handler (paged, cached per page)
         │       │   ├── GetProductPrice/ Endpoint, Query, Handler (currency conversion)
-        │       │   └── SyncSeller/      UserRegisteredIntegrationEventHandler (consumes Identity's event)
+        │       │   ├── SyncSeller/      UserRegisteredIntegrationEventHandler (consumes Identity's event)
+        │       │   ├── ErasePersonalData/  UserErasedIntegrationEventHandler (anonymizes the seller copy)
+        │       │   └── ExportPersonalData/ CatalogPersonalDataExporter
         │       ├── Infrastructure/  ProductRepository, CatalogCache (regions), CatalogOutputCache,
         │       │                    ExchangeRates/ (IExchangeRateProvider, Refit + ACL),
-        │       │                    Migrations/001_catalog.sql, 002_catalog_v2.sql, 003_catalog_grants.sql
+        │       │                    Migrations/001_catalog.sql … 004_catalog_personal_data.sql
         │       └── Resources/Catalog.en.json
         └── Identity/
-            ├── ModularMonolith.Identity.Contracts/  UserRegisteredIntegrationEvent
+            ├── ModularMonolith.Identity.Contracts/  UserRegisteredIntegrationEvent (v2), UserErasedIntegrationEvent
             └── ModularMonolith.Identity/
-                ├── IdentityModule.cs  IdentityOptions.cs  IdentityFeatures.cs  IdentityTelemetry.cs
+                ├── IdentityModule.cs  IdentityOptions.cs  IdentityFeatures.cs  IdentityPermissions.cs  IdentityTelemetry.cs
                 ├── Domain/          UserProfile, UserProfileId, Email, SubjectId, UserRegisteredDomainEvent, IdentityErrors
-                ├── Features/        RegisterUser/, GetCurrentUser/, ListUsers/
-                ├── Infrastructure/  UserProfileRepository, Keycloak/ (Refit + health check), Migrations/001-003
+                ├── Features/        RegisterUser/ (+ v1->v2 upcaster), GetCurrentUser/, ListUsers/,
+                │                    EraseUser/ (self-service and admin), ExportPersonalData/
+                ├── Infrastructure/  UserProfileRepository, Keycloak/ (Refit + health check), Migrations/001-004
                 └── Resources/Identity.en.json
 ```
 
@@ -373,12 +391,18 @@ internal sealed class UserRegisteredIntegrationEventHandler(IDbSession session) 
         // behind an inbox row (message_id, handler). Redelivery is a no-op.
         var connection = await session.GetConnectionAsync(ct);
         await connection.ExecuteAsync(new CommandDefinition("""
-            insert into catalog.sellers (subject_id, display_name, email, registered_at)
-            values (@SubjectId, @DisplayName, @Email, @OccurredAt)
-            on conflict (tenant_id, subject_id) do update set display_name = excluded.display_name
+            insert into catalog.sellers (subject_id, display_name, registered_at)   -- no e-mail: not needed here
+            values (@SubjectId, @DisplayName, @OccurredAt)
+            on conflict (tenant_id, subject_id) do update set display_name = excluded.display_name, erased_at = null
             """, e, session.Transaction, cancellationToken: ct));
     }
 }
+
+// The contract: a stable name and version, and personal data marked for redaction in audit and logs.
+[IntegrationEvent("identity.user-registered", version: 2)]   // v2 dropped Email; a v1->v2 upcaster reads old rows
+public sealed record UserRegisteredIntegrationEvent(
+    Guid EventId, DateTimeOffset OccurredAt, string TenantId, Guid UserProfileId, string SubjectId,
+    [property: PersonalData] string DisplayName) : IIntegrationEvent;
 ```
 
 ### 5. Module entry point: the only public type
@@ -429,6 +453,33 @@ create policy tenant_isolation on catalog.products
     with check (tenant_id = current_setting('app.tenant_id', true)); -- writes
 ```
 
+### 7. Authorization: permissions (role + scope) and a resource check
+
+```csharp
+// src/Modules/Catalog/ModularMonolith.Catalog/CatalogPermissions.cs
+// A permission needs BOTH a realm role (what the user may do) and an OAuth scope in the token
+// (what the user allowed this client application to do). Each module owns its permissions.
+internal static class CatalogPermissions
+{
+    public static Permission ProductsRead { get; } = new("catalog.products.read", "catalog.read", [AppRoles.User]);
+    public static Permission ProductsWrite { get; } = new("catalog.products.write", "catalog.write", [AppRoles.User]);
+    public static Permission[] All { get; } = [ProductsRead, ProductsWrite];
+}
+
+// CatalogModule.AddServices: every permission becomes an authorization policy with the same name.
+services.AddPermissions(CatalogPermissions.All);
+
+// The endpoint requires the permission...
+Put("catalog/products/{id:guid}/price");
+Policies(CatalogPermissions.ProductsWrite.Name);
+
+// ...and the handler decides on the RESOURCE, after loading it: only its seller or a tenant admin.
+if (!product.IsListedBy(currentUser.UserId) && !currentUser.IsInRole(AppRoles.Admin))
+{
+    return Result.Failure<int>(CatalogErrors.NotProductOwner);   // 403 problem details
+}
+```
+
 ---
 
 ## Multi-tenancy model
@@ -463,7 +514,7 @@ create policy tenant_isolation on catalog.products
 | One trace end to end | The producer's W3C `traceparent` is stored with the message; consumer spans are its children |
 | Retention | Daily Hangfire job per module (`Retention:*`): delivered outbox rows after 7 days, inbox rows after 30 days; dead letters are never purged. The audit log is append-only for the application, so its retention is a DBA task run with owner rights |
 | Safe deserialization | Only types exported by registered `*.Contracts` assemblies can be loaded; there is no `dynamic` dispatch |
-| Versioned contracts | Every integration event declares `[IntegrationEvent("module.event-name", version)]`; the outbox stores `module.event-name.vN`, never a CLR type name, so contract classes can be renamed or moved. Breaking changes bump the version and ship an `IIntegrationEventUpcaster` (vN to vN+1) in the publishing module; stored older messages are upcast step by step before deserialization. Missing attributes, duplicate names and gaps in an upcaster chain stop the host at startup. Rows from before versioning (CLR names) are read as v1 |
+| Versioned contracts | Every integration event declares `[IntegrationEvent("module.event-name", version)]`; the outbox stores `module.event-name.vN`, never a CLR type name, so contract classes can be renamed or moved. Breaking changes bump the version and ship an `IIntegrationEventUpcaster` (vN to vN+1) in the publishing module; stored older messages are upcast step by step before deserialization. Missing attributes, duplicate names and gaps in an upcaster chain stop the host at startup. Rows from before versioning (CLR names) are read as v1. Live example: `identity.user-registered` v2 (e-mail removed) with `UserRegisteredV1ToV2Upcaster` |
 
 ## Data access and caching
 
@@ -498,18 +549,88 @@ create policy tenant_isolation on catalog.products
 
 ## Security
 
+### Authentication
+
 - **API (`/api/*`):** JWT bearer with an audience check (`modular-monolith-api`). It returns 401 and never redirects.
 - **Browser (`/hangfire`):** cookie plus OpenID Connect. The `modular-monolith-web` client is public and uses PKCE, so there's no client secret.
-- **Defaults:**
-  - The fallback policy requires authentication everywhere.
-  - `/health/*` and `/metrics` opt out explicitly.
-  - Tenant user management requires role `admin`; cross-tenant tools (Hangfire dashboard, dead-letter replay) require role `operator`, which tenant users never get.
-- **Rate limiting:** a fixed window per tenant and user, falling back to the client IP.
-- **Secrets:**
-  - Aspire uses secret parameters.
-  - Compose uses `deploy/.env`, which is git-ignored.
-  - Only local-development defaults are committed (`appsettings.Development.json`, dev realm demo users).
-- **Data Protection keys** (session cookies, antiforgery) are stored in PostgreSQL (`platform.data_protection_keys`), shared by all replicas and kept across restarts. Outside Development they must be encrypted at rest with a certificate (`DataProtection:CertificatePath` / `CertificatePassword`); the host refuses to start without one.
+- **CLI and scripts:** the `modular-monolith-cli` client uses the OAuth 2.0 device authorization grant (RFC 8628). There is no password grant anywhere: users sign in, with MFA, in a browser (`scripts/get-token.ps1`).
+
+### Authorization model
+
+| Layer | Rule | Where |
+|---|---|---|
+| Default | Every endpoint requires an authenticated user (fallback policy); `/health/*` and `/metrics` opt out | `SecurityExtensions` |
+| Permission | Each endpoint requires a named permission = a realm role **and** an OAuth scope in the token. Modules declare their own (`CatalogPermissions`, `IdentityPermissions`); the host declares `PlatformPermissions`. `AddPermissions` turns each one into a policy and validates names at startup | `Policies(...)` on the endpoint |
+| Resource | Decisions that depend on the loaded entity, e.g. only the product's seller or a tenant admin may change its price (403 `catalog.not_product_owner`) | the handler |
+| Tenant | Row-level security limits every query to the token's tenant, so a permission never reaches another tenant's data | PostgreSQL |
+
+| Permission | Scope | Roles | Endpoints |
+|---|---|---|---|
+| `catalog.products.read` | `catalog.read` | user | list, get, price |
+| `catalog.products.write` | `catalog.write` | user | create, change price (own products, or any as admin) |
+| `identity.profile.read` | `identity.read` | user | `GET users/me` |
+| `identity.profile.write` | `identity.write` | user | register, erase own profile |
+| `identity.users.read` | `identity.read` | admin | list the tenant's users |
+| `identity.users.erase` | `identity.write` | admin | erase a user of the tenant |
+| `privacy.personal-data.export` | `identity.read` | user | `GET privacy/me/personal-data` |
+| `platform.outbox.read`, `platform.outbox.replay` | `platform.ops` | operator | dead-letter endpoints |
+
+Clients get the read scopes by default; `catalog.write`, `identity.write` and `platform.ops` are optional scopes that a client must request explicitly. The Hangfire dashboard uses a browser session without scopes and is role-based (`operator`). Operators need MFA for it.
+
+### Keycloak realm hardening (`deploy/keycloak/realm-export.json`)
+
+| Control | Setting |
+|---|---|
+| Brute-force detection | Temporary lockout after 5 failures, growing by 1 minute up to 15 minutes; quick-login check |
+| Password policy | At least 12 characters (max 128), upper, lower, digit, special character, not the username or e-mail, last 5 not reusable |
+| MFA | Custom browser flow `browser-mfa`: users with role `mfa` (inherited by `admin` and `operator`) must use TOTP and enrol at their first login. Applies to the device flow too |
+| Tokens and sessions | Access tokens 5 minutes; refresh tokens rotated and single-use; SSO idle 30 minutes, max 10 hours |
+| Clients | No password grant, no implicit flow; PKCE S256 on the web client; `fullScopeAllowed=false`, so only mapped realm roles reach tokens; read scopes default, write and operator scopes optional |
+| Accounts | Self-registration off; unique e-mail; username not editable; `tenant_id` editable by admins only |
+| Events | Login and admin events stored for 30 days |
+
+For production, start Keycloak with `start` (not `start-dev`), TLS and `sslRequired=all`. Configure SMTP and turn on `verifyEmail` and `resetPasswordAllowed`, and remove the demo users.
+
+### Personal data
+
+See [docs/privacy/personal-data.md](docs/privacy/personal-data.md) for the full inventory.
+
+- **Minimisation:** the e-mail address lives only in Identity. `identity.user-registered` v2 no longer carries it, and Catalog's `sellers` copy is emptied (migrations `004_*`).
+- **Redaction:** `[PersonalData]` marks fields on commands, audit snapshots and contracts.
+  - Audit rows store `[redacted]`; existing rows were redacted by migration.
+  - Serilog redacts marked properties when destructuring. A masking enricher masks sensitive property names and e-mail addresses in every log event.
+- **Export:** `GET /api/v1/privacy/me/personal-data` returns one JSON document built from every module's `IPersonalDataExporter`.
+- **Erasure:**
+  - The user (`DELETE /api/v1/identity/users/me`) or a tenant admin (`DELETE /api/v1/identity/users/{subjectId}`) can erase a profile.
+  - Identity anonymizes the profile and publishes `identity.user-erased` in the same transaction.
+  - Catalog anonymizes its seller copy when it consumes the event.
+  - The Keycloak account itself is disabled or deleted in Keycloak.
+- **Retention:** delivered outbox rows are purged after 7 days.
+
+### Secrets
+
+| Environment | Source |
+|---|---|
+| Aspire | Secret parameters (`dotnet user-secrets --project src/Aspire/ModularMonolith.AppHost`) |
+| `dotnet run` | The host's user secrets, written by `deploy/init-secrets.ps1`. `appsettings.Development.json` holds no passwords |
+| Compose | Docker secrets from `deploy/secrets/` (git-ignored, random values from `init-secrets`), mounted under `/run/secrets` |
+| Production | Any secret store that can write files: Kubernetes Secrets, External Secrets Operator, Secrets Store CSI driver, HashiCorp Vault or OpenBao Agent. The host reads every file in `Secrets:Directory` (default `/run/secrets`) as one configuration key, with `__` as the separator, overriding all other sources. Restart after rotation |
+
+The only credential still read from the environment is Keycloak's bootstrap admin in compose (`deploy/.env`), because Keycloak has no file option for it. Data Protection keys are stored in PostgreSQL (`platform.data_protection_keys`) and encrypted with a certificate outside Development (`DataProtection:CertificatePath` / `CertificatePassword`, both from the secret store).
+
+### Supply chain
+
+- `packages.lock.json` for every deployable project, with `RestoreLockedMode` in CI and `dotnet restore --locked-mode` in the Dockerfile. A changed or tampered package graph fails the build. The AppHost has no lock file because its Aspire packages are specific to the developer machine's platform.
+- NuGet audit covers direct and transitive packages (`NuGetAuditMode=all`, level `low`), and warnings are errors. Vulnerable transitive packages are pinned centrally.
+- `NuGet.Config`: nuget.org only, with package source mapping (no dependency confusion).
+- `.github/dependabot.yml`: weekly NuGet (grouped), Dockerfile base image and compose image updates.
+- Base images and all compose images are pinned to exact versions.
+
+### Container image
+
+- Runtime: `mcr.microsoft.com/dotnet/aspnet:10.0.10-noble-chiseled-extra`. It has no shell, no package manager and no curl, runs as non-root (`app`, UID 1654) and includes ICU and tzdata.
+- The application files are root-owned and read-only; the app writes nothing to disk, so any UID works.
+- The healthcheck is the app itself: `dotnet ModularMonolith.Host.dll healthcheck`, used by the Dockerfile `HEALTHCHECK` and compose. It probes `/health/ready` and exits 0 or 1.
 
 ---
 
@@ -521,7 +642,7 @@ create policy tenant_isolation on catalog.products
 | JSON | One configuration (`JsonDefaults`) for HTTP, outbox, cache and idempotency: camelCase, enums as camelCase strings, strict numbers, nulls written explicitly |
 | Errors | Always RFC 9457 problem details with `traceId`; human-readable `title`, occurrence-specific `detail`, stable `code` extension. This covers `Result` errors, binding and validation errors, 401, 403, 404, 405, 413, 429 and 504 |
 | Validation | 400 with `errors: { field: [messages] }`, the same shape for request binding errors and command validation |
-| Status codes | 200, 201 (+ `Location` of the new resource), 400, 401, 403, 404, 409, 413, 422 (idempotency key reuse), 429 (+ `Retry-After`), 503 (feature disabled / dependency down), 504 (timeout) |
+| Status codes | 200, 201 (+ `Location` of the new resource), 204 (erasure), 400, 401, 403 (missing permission or not the resource owner), 404, 409, 413, 422 (idempotency key reuse), 429 (+ `Retry-After`), 503 (feature disabled / dependency down), 504 (timeout) |
 | Lists | Always paged: `?page=1&pageSize=20` (max 100), response `{ items, page, pageSize, totalCount, totalPages, hasNextPage, hasPreviousPage }`, deterministic ordering |
 | Limits | Request timeout `Http:RequestTimeoutSeconds` (504), body size `Http:MaxRequestBodyBytes` (413), rate limit per tenant + user (429) |
 | Idempotency | `Idempotency-Key` header on POST, per-endpoint `IdempotencyPolicy` |
@@ -552,6 +673,8 @@ Every section is a strongly typed options class with an `IValidateOptions<T>` va
 | `DataProtection` | Application name set; a certificate file is required when `RequireEncryptionAtRest` (default outside Development) |
 | `ReverseProxy` | Proxies are IP addresses, networks are CIDR ranges, forward limit 1–10 |
 | `Observability` | `TraceSampleRatio` between 0 and 1 (checked at startup); `CollectorEndpoint`, `LokiUrl` optional |
+| `Secrets` | `Directory`: secret files (one key per file, default `/run/secrets`); a missing directory is ignored |
+| Permissions | Names and scopes are lowercase dot-separated identifiers, at least one role, no duplicates (checked when the authorization options are built) |
 | `Modules:Catalog`, `Modules:Identity` | Cache and output-cache TTLs within range; URLs are absolute http(s) |
 
 Behind a TLS-terminating load balancer or ingress, set `ReverseProxy__KnownNetworks__0=<ingress CIDR>` so the client IP (rate limiting, audit) and the https scheme are taken from `X-Forwarded-*`.
@@ -596,7 +719,7 @@ On SIGTERM the host:
 
 The orchestrator's grace period must exceed drain + timeout: compose sets `stop_grace_period: 45s` (use `terminationGracePeriodSeconds` in Kubernetes).
 
-Compose also defines CPU and memory limits for every service and a readiness healthcheck for the API (`/health/ready`, probed with bash because the runtime image has no curl).
+Compose also defines CPU and memory limits for every service and a readiness healthcheck for the API. The check is `dotnet ModularMonolith.Host.dll healthcheck`, which probes `/health/ready`; the chiseled image has no shell or curl.
 
 ---
 
@@ -605,13 +728,13 @@ Compose also defines CPU and memory limits for every service and a readiness hea
 ### … a slice to an existing module
 
 1. Create `Features/<UseCase>/`.
-2. Add a `…Command : ICommand<T>` or `…Query : IQuery<T>` (use the module's typed ids, e.g. `ProductId`, inside the module and `Guid` only at the HTTP boundary). Name event handlers `{Event}DomainEventHandler` or `{Event}IntegrationEventHandler`; put external dependencies behind an interface (e.g. `IExchangeRateProvider`), a handler, an optional `AbstractValidator<…>`, and a FastEndpoints endpoint with slice-local request and response records. List queries take a `PageRequest` and return `PagedResult<T>`; endpoints document their responses with `Description(... .ProducesProblems(...), clearDefaults: true)`.
+2. Add a `…Command : ICommand<T>` or `…Query : IQuery<T>` (use the module's typed ids, e.g. `ProductId`, inside the module and `Guid` only at the HTTP boundary). Name event handlers `{Event}DomainEventHandler` or `{Event}IntegrationEventHandler`; put external dependencies behind an interface (e.g. `IExchangeRateProvider`), a handler, an optional `AbstractValidator<…>`, and a FastEndpoints endpoint with slice-local request and response records. List queries take a `PageRequest` and return `PagedResult<T>`; endpoints document their responses with `Description(... .ProducesProblems(...), clearDefaults: true)` and require a permission with `Policies(<Module>Permissions.X.Name)`. Checks that depend on the loaded entity (ownership) go into the handler. Mark personal fields `[property: PersonalData]` (see `docs/privacy/personal-data.md`).
 3. That's all. Handlers and validators are picked up by assembly scanning and wrapped by the decorator chain automatically.
 
 ### … a module
 
 1. Create `src/Modules/<Name>/ModularMonolith.<Name>` and `ModularMonolith.<Name>.Contracts`. Copy a csproj; reference Kernel, Shared.Infrastructure and only other modules' `*.Contracts`.
-2. Add a public `<Name>Module : IModule` with a unique `Schema`.
+2. Add a public `<Name>Module : IModule` with a unique `Schema`, and an internal `<Name>Permissions` class registered with `services.AddPermissions(...)` in `AddServices` (add its scopes to the Keycloak clients).
 3. Add `Infrastructure/Migrations/001_<name>.sql` with the tables. Include `tenant_id`, `version` and the RLS policy, plus `outbox_messages`, `inbox_messages` and `audit_log` with the columns of Catalog's `001` and `002` scripts, and explicit grants to `$app_role$` like Catalog's `003` script (no schema-wide grants). Never edit an applied migration; add the next numbered script instead.
 4. Add `new <Name>Module()` to the module list in `Host/Program.cs` and a project reference in the Host csproj.
 
@@ -624,6 +747,8 @@ Compose also defines CPU and memory limits for every service and a readiness hea
 | `Nullable`, `ImplicitUsings`, `TreatWarningsAsErrors`, `AnalysisLevel=latest-recommended`, `EnforceCodeStyleInBuild`, `GenerateDocumentationFile`, deterministic and CI builds | `Directory.Build.props` |
 | `TargetFramework` and `LangVersion` pinned explicitly | every `.csproj` |
 | Central package versions, transitive security pins (`Newtonsoft.Json`, `MessagePack`) | `Directory.Packages.props` |
+| Lock files (`packages.lock.json`, locked mode in CI), NuGet audit of all packages | `Directory.Build.props` |
+| Package source mapping | `NuGet.Config` |
 | Meziantou.Analyzer for every project | `GlobalPackageReference` |
 | File-scoped namespaces (error), formatting (IDE0055), unused usings (IDE0005), braces, naming | `.editorconfig` |
 | Justified analyzer overrides (DI-created internals, no `ConfigureAwait` in ASP.NET Core, …) | bottom of `.editorconfig` |
@@ -651,3 +776,6 @@ All free for commercial use. There are no paid tiers and no commercial-licensed 
 | Keycloak | Apache-2.0 |
 | Prometheus | Apache-2.0 |
 | Grafana, Loki, Tempo (self-hosted OSS) | AGPL-3.0 |
+| OpenTelemetry Collector (contrib distribution) | Apache-2.0 |
+| .NET container images (Ubuntu chiseled) | MIT (.NET) and the Ubuntu package licenses |
+| Dependabot | free GitHub service |

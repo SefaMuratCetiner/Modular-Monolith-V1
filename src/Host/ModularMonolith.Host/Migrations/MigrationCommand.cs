@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using ModularMonolith.Host.Configuration;
 using ModularMonolith.Shared.Infrastructure;
 using ModularMonolith.Shared.Infrastructure.Migrations;
 using ModularMonolith.Shared.Infrastructure.Modules;
@@ -20,6 +21,7 @@ internal static class MigrationCommand
     {
         // A plain generic host: no web server, no Valkey, no Hangfire server, only what migrations need.
         var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder(args);
+        builder.Configuration.AddSecretFiles(); // the owner connection string comes from the secret store
         builder.Services.AddModuleMigrations(builder.Configuration, modules);
         builder.Services.AddSingleton<IDatabaseSetupStep, HangfireSchemaStep>();
 

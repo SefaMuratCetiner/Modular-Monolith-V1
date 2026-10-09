@@ -1,14 +1,24 @@
 ### Local smoke requests (VS / Rider / VS Code REST Client).
-### 1) Get a token for the demo user "alice" (tenant "acme", roles "admin" and "operator") from the dev realm.
-###    Direct access grants are enabled on the dev-only "modular-monolith-cli" client.
+### Tokens come from the OAuth 2.0 device authorization grant (RFC 8628); there is no password grant.
+### Shortcut: `./scripts/get-token.ps1 -Scope "catalog.write identity.write platform.ops"` and paste the token below.
 @host = http://localhost:5080
 @keycloak = http://localhost:8080/realms/modular-monolith
 
+### 1) Request a device code. Default scopes: catalog.read, identity.read; the write and operator scopes are optional.
+# @name device
+POST {{keycloak}}/protocol/openid-connect/auth/device
+Content-Type: application/x-www-form-urlencoded
+
+client_id=modular-monolith-cli&scope=openid%20catalog.write%20identity.write%20platform.ops
+
+### 2) Open the "verification_uri_complete" of the response in a browser and sign in, e.g. as alice
+###    (tenant "acme", roles admin + operator; enrol an authenticator app at the first login).
+### 3) Exchange the approved device code for tokens.
 # @name token
 POST {{keycloak}}/protocol/openid-connect/token
 Content-Type: application/x-www-form-urlencoded
 
-grant_type=password&client_id=modular-monolith-cli&username=alice&password=alice&scope=openid
+grant_type=urn:ietf:params:oauth:grant-type:device_code&client_id=modular-monolith-cli&device_code={{device.response.body.device_code}}
 
 ###
 @accessToken = {{token.response.body.access_token}}
@@ -62,12 +72,25 @@ Content-Type: application/json
 GET {{host}}/api/v1/catalog/products/{{productId}}/price?currency=EUR
 Authorization: Bearer {{accessToken}}
 
-### Operators (alice has the operator role): inspect and replay dead-lettered outbox messages
+### Operators (role operator + scope platform.ops): inspect and replay dead-lettered outbox messages
 GET {{host}}/api/v1/ops/outbox/catalog/dead-letters?page=1&pageSize=20
 Authorization: Bearer {{accessToken}}
 
 ###
 POST {{host}}/api/v1/ops/outbox/catalog/dead-letters/requeue
+Authorization: Bearer {{accessToken}}
+
+### Personal data: export everything the application stores about the caller (GDPR Art. 15/20)
+GET {{host}}/api/v1/privacy/me/personal-data
+Authorization: Bearer {{accessToken}}
+
+### Personal data: erase the caller's profile (Identity at once, other modules via identity.user-erased)
+DELETE {{host}}/api/v1/identity/users/me
+Authorization: Bearer {{accessToken}}
+
+### Tenant admins: erase another user of the tenant by subject id
+@subjectId = 00000000-0000-0000-0000-000000000000
+DELETE {{host}}/api/v1/identity/users/{{subjectId}}
 Authorization: Bearer {{accessToken}}
 
 ### Health and metrics (anonymous)

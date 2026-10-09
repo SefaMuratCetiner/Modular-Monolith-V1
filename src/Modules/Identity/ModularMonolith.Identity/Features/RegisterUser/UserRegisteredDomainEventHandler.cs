@@ -25,7 +25,6 @@ internal sealed class UserRegisteredDomainEventHandler(
                 tenantContext.TenantId,
                 domainEvent.UserProfileId.Value,
                 domainEvent.SubjectId,
-                domainEvent.Email,
                 domainEvent.DisplayName),
             cancellationToken);
 

@@ -20,6 +20,7 @@ internal sealed class CreateProductEndpoint(CreateProductHandler handler)
     {
         Post("catalog/products");
         Version(1);
+        Policies(CatalogPermissions.ProductsWrite.Name);
         // Creating a product twice is costly: with a key, never process without duplicate protection.
         Options(builder => builder
             .WithTags("Catalog")

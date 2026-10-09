@@ -16,6 +16,7 @@ internal sealed class RegisterUserEndpoint(RegisterUserHandler handler)
     {
         Post("identity/users/me");
         Version(1);
+        Policies(IdentityPermissions.ProfileWrite.Name);
         Options(builder => builder.WithTags("Identity").RequireRateLimiting(RateLimitPolicies.PerUser));
         PreProcessor<IdempotencyPreProcessor<RegisterUserRequest>>();
         PostProcessor<IdempotencyPostProcessor<RegisterUserRequest, RegisterUserResponse>>();

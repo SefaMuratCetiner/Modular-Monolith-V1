@@ -15,7 +15,7 @@
     {
       "modifiers": [
         {
-          "exclude": [ "**/bin/**", "**/obj/**", "**/.vs/**", "**/.idea/**", ".template.config/**", "**/*.user" ]
+          "exclude": [ "**/bin/**", "**/obj/**", "**/.vs/**", "**/.idea/**", ".template.config/**", "**/*.user", "deploy/secrets/**", "deploy/.env" ]
         }
       ]
     }

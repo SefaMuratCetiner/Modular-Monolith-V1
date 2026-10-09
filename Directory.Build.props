@@ -25,7 +25,25 @@
     <Copyright>MIT</Copyright>
   </PropertyGroup>
 
+  <!--
+    Supply chain:
+    - packages.lock.json per project pins the exact resolved graph (including transitive packages and
+      their content hashes). Commit the lock files; CI and the Dockerfile restore in locked mode, so a
+      changed or tampered package fails the build instead of silently entering it.
+    - NuGet audit checks every package, direct and transitive, against the GitHub Advisory Database on
+      restore; with TreatWarningsAsErrors any known vulnerability fails the build.
+    - NuGet.Config maps every package to an explicit source (no dependency confusion).
+    - Dependabot (.github/dependabot.yml) proposes NuGet, Docker and compose image updates.
+  -->
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
+  </PropertyGroup>
+
   <PropertyGroup Condition="'$(CI)' == 'true' or '$(TF_BUILD)' == 'true' or '$(GITHUB_ACTIONS)' == 'true'">
     <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <RestoreLockedMode>true</RestoreLockedMode>
   </PropertyGroup>
 </Project>

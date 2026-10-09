@@ -18,6 +18,9 @@ internal static partial class HostLog
     [LoggerMessage(EventId = 2012, Level = LogLevel.Error, Message = "OpenAPI contract {Path} is out of date: run the '{Command}' command and commit the result")]
     public static partial void OpenApiOutdated(ILogger logger, string path, string command);
 
+    [LoggerMessage(EventId = 2020, Level = LogLevel.Information, Message = "Personal data of subject {SubjectId} exported ({SectionCount} module sections)")]
+    public static partial void PersonalDataExported(ILogger logger, string subjectId, int sectionCount);
+
     [LoggerMessage(EventId = 2100, Level = LogLevel.Information, Message = "Shutdown requested: readiness is now unhealthy; draining for {DrainSeconds}s before closing connections")]
     public static partial void DrainStarted(ILogger logger, int drainSeconds);
 }

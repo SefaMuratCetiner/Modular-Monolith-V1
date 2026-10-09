@@ -1,0 +1,39 @@
+# Dependency updates (free on GitHub). Renovate can read the same files if you prefer it.
+# NuGet: Directory.Packages.props (central package management) and packages.lock.json are updated together.
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      aspire:
+        patterns: [ "Aspire.*", "Microsoft.Extensions.ServiceDiscovery*", "Microsoft.Extensions.Http.Resilience" ]
+      aspnetcore:
+        patterns: [ "Microsoft.AspNetCore.*" ]
+      opentelemetry:
+        patterns: [ "OpenTelemetry*" ]
+      serilog:
+        patterns: [ "Serilog*" ]
+      fastendpoints:
+        patterns: [ "FastEndpoints*" ]
+      hangfire:
+        patterns: [ "Hangfire*" ]
+      analyzers:
+        patterns: [ "Meziantou.Analyzer" ]
+
+  # Base images of the Dockerfile (SDK and chiseled runtime).
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      dotnet-images:
+        patterns: [ "dotnet/*" ]
+
+  # Pinned infrastructure images in compose (PostgreSQL, Valkey, Keycloak, LGTM, collector).
+  - package-ecosystem: docker-compose
+    directory: "/deploy"
+    schedule:
+      interval: weekly

@@ -14,4 +14,7 @@ internal static class IdentityTelemetry
 
     public static Counter<long> UsersRegistered { get; } =
         Meter.CreateCounter<long>("modmono.identity.users.registered", description: "User profiles registered (committed).");
+
+    public static Counter<long> UsersErased { get; } =
+        Meter.CreateCounter<long>("modmono.identity.users.erased", description: "User profiles erased on request (committed).");
 }

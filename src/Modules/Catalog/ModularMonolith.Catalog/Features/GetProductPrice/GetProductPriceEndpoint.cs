@@ -17,6 +17,7 @@ internal sealed class GetProductPriceEndpoint(IQueryHandler<GetProductPriceQuery
     {
         Get("catalog/products/{id:guid}/price");
         Version(1);
+        Policies(CatalogPermissions.ProductsRead.Name);
         // Output cache (Valkey): identical for all users of a tenant, evicted when a price changes.
         Options(builder => builder
             .WithTags("Catalog")

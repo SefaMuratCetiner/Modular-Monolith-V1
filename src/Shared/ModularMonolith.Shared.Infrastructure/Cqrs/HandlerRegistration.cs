@@ -4,6 +4,7 @@ using ModularMonolith.Shared.Infrastructure.Messaging;
 using ModularMonolith.Shared.Infrastructure.Modules;
 using ModularMonolith.Shared.Kernel.Cqrs;
 using ModularMonolith.Shared.Kernel.Messaging;
+using ModularMonolith.Shared.Kernel.Privacy;
 
 namespace ModularMonolith.Shared.Infrastructure.Cqrs;
 
@@ -40,6 +41,12 @@ internal static class HandlerRegistration
             {
                 // Upcasters of the publishing module's contracts (see IntegrationEventRegistry).
                 services.AddSingleton(typeof(IIntegrationEventUpcaster), type);
+            }
+
+            if (typeof(IPersonalDataExporter).IsAssignableFrom(type))
+            {
+                // The module's part of a personal-data export (combined by the host).
+                services.AddScoped(typeof(IPersonalDataExporter), type);
             }
 
             foreach (var contract in type.GetInterfaces().Where(contract => contract.IsGenericType))

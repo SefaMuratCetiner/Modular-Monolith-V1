@@ -32,6 +32,10 @@ internal static class LoggingExtensions
                 .ReadFrom.Configuration(configuration)
                 .ReadFrom.Services(services)
                 .Enrich.FromLogContext()
+                // Personal data: [PersonalData] properties are redacted when destructured, and the masking
+                // enricher (after FromLogContext, so it sees every property) catches the rest for all sinks.
+                .Destructure.With<PersonalDataDestructuringPolicy>()
+                .Enrich.With<PersonalDataMaskingEnricher>()
                 .Enrich.WithProperty("service_name", serviceName)
                 .Enrich.WithProperty("service_version", serviceVersion)
                 .Enrich.WithProperty("deployment_environment", environmentName)
@@ -42,42 +46,47 @@ internal static class LoggingExtensions
                     bufferSize: 10_000,
                     blockWhenFull: false);
 
-            var lokiUrl = configuration["Observability:LokiUrl"];
-            if (!string.IsNullOrWhiteSpace(lokiUrl))
-            {
-                logger.WriteTo.GrafanaLoki(
-                    lokiUrl,
-                    labels:
-                    [
-                        new LokiLabel { Key = "service_name", Value = serviceName },
-                        new LokiLabel { Key = "deployment_environment", Value = environmentName },
-                    ],
-                    propertiesAsLabels: ["level"]);
-            }
-
-            if (configuration.GetValue<bool>("Observability:OtlpLogs")
-                && !string.IsNullOrWhiteSpace(configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]))
-            {
-                // Endpoint, protocol and headers are read from the standard OTEL_* environment variables.
-                logger.WriteTo.OpenTelemetry(options => AddResource(options.ResourceAttributes, serviceName, serviceVersion, environmentName));
-            }
-
-            // Second destination: the OpenTelemetry Collector, which forwards logs to Loki (OTLP).
-            var collectorEndpoint = configuration["Observability:CollectorEndpoint"];
-            if (!string.IsNullOrWhiteSpace(collectorEndpoint))
-            {
-                logger.WriteTo.OpenTelemetry(
-                    options =>
-                    {
-                        options.Endpoint = collectorEndpoint;
-                        options.Protocol = OtlpProtocol.Grpc;
-                        AddResource(options.ResourceAttributes, serviceName, serviceVersion, environmentName);
-                    },
-                    ignoreEnvironment: true);
-            }
+            AddExportSinks(logger, configuration, serviceName, serviceVersion, environmentName);
         });
 
         return builder;
+    }
+
+    private static void AddExportSinks(LoggerConfiguration logger, ConfigurationManager configuration, string serviceName, string serviceVersion, string environmentName)
+    {
+        var lokiUrl = configuration["Observability:LokiUrl"];
+        if (!string.IsNullOrWhiteSpace(lokiUrl))
+        {
+            logger.WriteTo.GrafanaLoki(
+                lokiUrl,
+                labels:
+                [
+                    new LokiLabel { Key = "service_name", Value = serviceName },
+                    new LokiLabel { Key = "deployment_environment", Value = environmentName },
+                ],
+                propertiesAsLabels: ["level"]);
+        }
+
+        if (configuration.GetValue<bool>("Observability:OtlpLogs")
+            && !string.IsNullOrWhiteSpace(configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]))
+        {
+            // Endpoint, protocol and headers are read from the standard OTEL_* environment variables.
+            logger.WriteTo.OpenTelemetry(options => AddResource(options.ResourceAttributes, serviceName, serviceVersion, environmentName));
+        }
+
+        // Second destination: the OpenTelemetry Collector, which forwards logs to Loki (OTLP).
+        var collectorEndpoint = configuration["Observability:CollectorEndpoint"];
+        if (!string.IsNullOrWhiteSpace(collectorEndpoint))
+        {
+            logger.WriteTo.OpenTelemetry(
+                options =>
+                {
+                    options.Endpoint = collectorEndpoint;
+                    options.Protocol = OtlpProtocol.Grpc;
+                    AddResource(options.ResourceAttributes, serviceName, serviceVersion, environmentName);
+                },
+                ignoreEnvironment: true);
+        }
     }
 
     private static void AddResource(IDictionary<string, object> attributes, string serviceName, string serviceVersion, string environmentName)

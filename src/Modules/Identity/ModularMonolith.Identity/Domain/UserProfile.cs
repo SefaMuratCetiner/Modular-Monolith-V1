@@ -38,7 +38,36 @@ internal sealed class UserProfile : AggregateRoot<UserProfileId>
         }
 
         var profile = new UserProfile(UserProfileId.New(now), subjectId, email, trimmedName, isBetaUser);
-        profile.Raise(new UserRegisteredDomainEvent(Guid.CreateVersion7(now), now, profile.Id, subjectId.Value, email.Value, trimmedName));
+        profile.Raise(new UserRegisteredDomainEvent(Guid.CreateVersion7(now), now, profile.Id, subjectId.Value, trimmedName));
         return Result.Success(profile);
+    }
+
+    /// <summary>Rebuilds a profile from storage (no events, no validation of historical data).</summary>
+    public static UserProfile Rehydrate(
+        UserProfileId id,
+        string subjectId,
+        string email,
+        string displayName,
+        bool isBetaUser,
+        int version,
+        string createdBy,
+        DateTimeOffset createdAt,
+        string? modifiedBy,
+        DateTimeOffset? modifiedAt)
+    {
+        var profile = new UserProfile(id, SubjectId.Create(subjectId).Value, Email.Create(email).Value, displayName, isBetaUser);
+        profile.RestorePersistedState(version, createdBy, createdAt, modifiedBy, modifiedAt);
+        return profile;
+    }
+
+    /// <summary>
+    /// Erases the profile's personal data (right to erasure) and raises <see cref="UserErasedDomainEvent"/>,
+    /// which tells the other modules to anonymize their copies. The row stays (soft-deleted, anonymized),
+    /// so audit rows and products keep a valid, pseudonymous reference.
+    /// </summary>
+    public void Erase(DateTimeOffset now)
+    {
+        MarkDeleted();
+        Raise(new UserErasedDomainEvent(Guid.CreateVersion7(now), now, Id, SubjectId.Value));
     }
 }

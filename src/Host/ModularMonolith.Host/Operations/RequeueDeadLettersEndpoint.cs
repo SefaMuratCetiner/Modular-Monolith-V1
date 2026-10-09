@@ -18,7 +18,7 @@ internal sealed class RequeueDeadLettersEndpoint(OutboxAdministration administra
     {
         Post("ops/outbox/{module}/dead-letters/requeue", "ops/outbox/{module}/dead-letters/{id:guid}/requeue");
         Version(1);
-        Policies(SecurityExtensions.OperatorPolicy);
+        Policies(PlatformPermissions.OutboxReplay.Name);
         Options(builder => builder.WithTags("Operations").RequireRateLimiting(RateLimitPolicies.PerUser));
         Description(
             builder => builder

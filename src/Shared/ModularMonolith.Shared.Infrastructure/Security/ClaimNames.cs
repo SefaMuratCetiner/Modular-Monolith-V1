@@ -15,6 +15,12 @@ public static class ClaimNames
     /// <summary>The flat list of realm roles (Keycloak realm-role mapper).</summary>
     public const string Roles = "roles";
 
+    /// <summary>The space-separated OAuth scopes granted to the client (RFC 9068 <c>scope</c>).</summary>
+    public const string Scope = "scope";
+
+    /// <summary>The alternative scope claim some identity providers issue (<c>scp</c>).</summary>
+    public const string ScopeAlternative = "scp";
+
     /// <summary>The display user name.</summary>
     public const string PreferredUserName = "preferred_username";
 }

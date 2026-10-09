@@ -17,7 +17,7 @@ internal sealed class ListDeadLettersEndpoint(OutboxAdministration administratio
     {
         Get("ops/outbox/{module}/dead-letters");
         Version(1);
-        Policies(SecurityExtensions.OperatorPolicy);
+        Policies(PlatformPermissions.OutboxRead.Name);
         Options(builder => builder.WithTags("Operations").RequireRateLimiting(RateLimitPolicies.PerUser));
         Description(
             builder => builder

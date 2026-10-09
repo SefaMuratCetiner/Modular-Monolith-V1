@@ -5,6 +5,9 @@ namespace ModularMonolith.Shared.Infrastructure.Security;
 /// </summary>
 public static class AppRoles
 {
+    /// <summary>Regular user of a tenant: every account has it.</summary>
+    public const string User = "user";
+
     /// <summary>Tenant administrator: manages the users of their own tenant.</summary>
     public const string Admin = "admin";
 
