@@ -32,10 +32,15 @@ var cache = builder.AddValkey("cache")
 // ---------------------------------------------------------------------------------------------
 var keycloakAdminPassword = builder.AddParameter("keycloak-admin-password", secret: true);
 
+// Secret of the "modular-monolith-admin" service account (erasure of Keycloak accounts). Keycloak fills it
+// into the realm import; the API uses it for the admin REST API.
+var accountErasureSecret = builder.AddParameter("keycloak-admin-client-secret", secret: true);
+
 // Fixed port 8080: the token issuer URL must be identical for browsers, CLIs and the API.
 var keycloak = builder.AddContainer("keycloak", "quay.io/keycloak/keycloak", "26.3.3")
     .WithEnvironment("KC_BOOTSTRAP_ADMIN_USERNAME", "admin")
     .WithEnvironment("KC_BOOTSTRAP_ADMIN_PASSWORD", keycloakAdminPassword)
+    .WithEnvironment("KEYCLOAK_ADMIN_CLIENT_SECRET", accountErasureSecret)
     .WithArgs("start-dev", "--import-realm")
     .WithBindMount("../../../deploy/keycloak", "/opt/keycloak/data/import", isReadOnly: true)
     .WithHttpEndpoint(port: 8080, targetPort: 8080, name: "http");
@@ -94,6 +99,7 @@ builder.AddProject<Projects.ModularMonolith_Host>("api")
     .WithEnvironment("ConnectionStrings__postgres", apiConnectionString)
     .WithReference(cache)
     .WithEnvironment("Authentication__Authority", ReferenceExpression.Create($"{keycloakHttp}/realms/modular-monolith"))
+    .WithEnvironment("Modules__Identity__AccountErasure__ClientSecret", accountErasureSecret)
     .WithEnvironment("Observability__CollectorEndpoint", collector.GetEndpoint("otlp"))
     .WithEnvironment("Observability__OtlpMetrics", "true")
     .WithEnvironment("Observability__OtlpLogs", "true")

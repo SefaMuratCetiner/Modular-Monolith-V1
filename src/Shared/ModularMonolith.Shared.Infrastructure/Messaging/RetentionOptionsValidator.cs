@@ -9,7 +9,7 @@ internal sealed class RetentionOptionsValidator : IValidateOptions<RetentionOpti
     public ValidateOptionsResult Validate(string? name, RetentionOptions options)
     {
         var failures = new List<string>();
-        if (options.ProcessedOutboxDays < 0 || options.InboxDays < 0)
+        if (options.ProcessedOutboxDays < 0 || options.InboxDays < 0 || options.DeadLetterDays < 0 || options.AuditIpAddressDays < 0)
         {
             failures.Add("Retention days must be 0 (keep forever) or positive.");
         }
@@ -17,6 +17,21 @@ internal sealed class RetentionOptionsValidator : IValidateOptions<RetentionOpti
         if (options.InboxDays is > 0 and < 7)
         {
             failures.Add("InboxDays must be 0 or at least 7, so late redeliveries are still deduplicated.");
+        }
+
+        if (options.DeadLetterDays is > 0 and < 7)
+        {
+            failures.Add("DeadLetterDays must be 0 or at least 7, so operators have time to inspect and replay.");
+        }
+
+        if (options.AuditLogDays is < 0 or (> 0 and < 30))
+        {
+            failures.Add("AuditLogDays must be 0 (keep forever) or at least 30.");
+        }
+
+        if (options.AuditLogDays > 0 && options.AuditIpAddressDays > options.AuditLogDays)
+        {
+            failures.Add("AuditIpAddressDays must not exceed AuditLogDays.");
         }
 
         if (options.BatchSize is < 100 or > 100_000)

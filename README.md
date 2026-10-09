@@ -27,6 +27,7 @@ dotnet new modular-monolith -n MyCompany.Platform
 # You'll be asked for the secret parameters in the dashboard, or set them once:
 dotnet user-secrets --project src/Aspire/ModularMonolith.AppHost set "Parameters:postgres-password" "<pick one>"
 dotnet user-secrets --project src/Aspire/ModularMonolith.AppHost set "Parameters:keycloak-admin-password" "<pick one>"
+dotnet user-secrets --project src/Aspire/ModularMonolith.AppHost set "Parameters:keycloak-admin-client-secret" "<pick one>"
 dotnet user-secrets --project src/Aspire/ModularMonolith.AppHost set "Parameters:grafana-admin-password" "<pick one>"
 dotnet user-secrets --project src/Aspire/ModularMonolith.AppHost set "Parameters:api-db-password" "<pick one>"
 dotnet run --project src/Aspire/ModularMonolith.AppHost      # runs "migrations" to completion, then starts "api"
@@ -152,7 +153,10 @@ ModularMonolithV1/
 ├── deploy/
 │   ├── docker-compose.yml  docker-compose.override.yml  .env.example
 │   ├── init-secrets.ps1  init-secrets.sh   # random dev passwords -> deploy/secrets/ (git-ignored) + user secrets
-│   ├── keycloak/realm-export.json   # hardened realm: brute force, password policy, MFA flow, scopes, device flow
+│   ├── production/                  # production Keycloak: start --optimized, TLS only, own PostgreSQL, SMTP,
+│   │                                # realm without demo users (keycloak/), secrets from files; README.md
+│   ├── keycloak/realm-export.json   # development realm: hardened (brute force, password policy, MFA, scopes,
+│   │                                # device flow), demo users, erasure service account
 │   ├── otel-collector/config.yaml   # OTLP in; memory limit, tail sampling, batching; traces -> Tempo, logs -> Loki
 │   └── grafana/
 │       ├── tempo.yaml  loki.yaml  prometheus.yaml  prometheus.aspire.yaml
@@ -224,7 +228,7 @@ ModularMonolithV1/
         │       │   └── ExportPersonalData/ CatalogPersonalDataExporter
         │       ├── Infrastructure/  ProductRepository, CatalogCache (regions), CatalogOutputCache,
         │       │                    ExchangeRates/ (IExchangeRateProvider, Refit + ACL),
-        │       │                    Migrations/001_catalog.sql … 004_catalog_personal_data.sql
+        │       │                    Migrations/001_catalog.sql … 005_catalog_audit_retention.sql
         │       └── Resources/Catalog.en.json
         └── Identity/
             ├── ModularMonolith.Identity.Contracts/  UserRegisteredIntegrationEvent (v2), UserErasedIntegrationEvent
@@ -232,8 +236,10 @@ ModularMonolithV1/
                 ├── IdentityModule.cs  IdentityOptions.cs  IdentityFeatures.cs  IdentityPermissions.cs  IdentityTelemetry.cs
                 ├── Domain/          UserProfile, UserProfileId, Email, SubjectId, UserRegisteredDomainEvent, IdentityErrors
                 ├── Features/        RegisterUser/ (+ v1->v2 upcaster), GetCurrentUser/, ListUsers/,
-                │                    EraseUser/ (self-service and admin), ExportPersonalData/
-                ├── Infrastructure/  UserProfileRepository, Keycloak/ (Refit + health check), Migrations/001-004
+                │                    EraseUser/ (self-service and admin; Keycloak account erasure consumer),
+                │                    ExportPersonalData/
+                ├── Infrastructure/  UserProfileRepository, Keycloak/ (health check; admin API client with a cached
+                │                    service-account token), Migrations/001-005
                 └── Resources/Identity.en.json
 ```
 
@@ -512,7 +518,7 @@ if (!product.IsListedBy(currentUser.UserId) && !currentUser.IsInRole(AppRoles.Ad
 | Exactly-once effect per consumer | Inbox `(message_id, handler)` is inserted in the consumer's transaction; handlers that already succeeded are skipped on redelivery |
 | Dead letters | Inspect and replay with the operator endpoints `GET /api/v1/ops/outbox/{module}/dead-letters` and `POST .../dead-letters[/{id}]/requeue` |
 | One trace end to end | The producer's W3C `traceparent` is stored with the message; consumer spans are its children |
-| Retention | Daily Hangfire job per module (`Retention:*`): delivered outbox rows after 7 days, inbox rows after 30 days; dead letters are never purged. The audit log is append-only for the application, so its retention is a DBA task run with owner rights |
+| Retention | Daily Hangfire job per module (`Retention:*`): delivered outbox rows after 7 days, dead letters after 30, inbox rows after 30; audit-log client IP addresses after 90 days and audit rows after 365 (see [Audit-log retention](#audit-log-retention)) |
 | Safe deserialization | Only types exported by registered `*.Contracts` assemblies can be loaded; there is no `dynamic` dispatch |
 | Versioned contracts | Every integration event declares `[IntegrationEvent("module.event-name", version)]`; the outbox stores `module.event-name.vN`, never a CLR type name, so contract classes can be renamed or moved. Breaking changes bump the version and ship an `IIntegrationEventUpcaster` (vN to vN+1) in the publishing module; stored older messages are upcast step by step before deserialization. Missing attributes, duplicate names and gaps in an upcaster chain stop the host at startup. Rows from before versioning (CLR names) are read as v1. Live example: `identity.user-registered` v2 (e-mail removed) with `UserRegisteredV1ToV2Upcaster` |
 
@@ -589,7 +595,14 @@ Clients get the read scopes by default; `catalog.write`, `identity.write` and `p
 | Accounts | Self-registration off; unique e-mail; username not editable; `tenant_id` editable by admins only |
 | Events | Login and admin events stored for 30 days |
 
-For production, start Keycloak with `start` (not `start-dev`), TLS and `sslRequired=all`. Configure SMTP and turn on `verifyEmail` and `resetPasswordAllowed`, and remove the demo users.
+**Development vs production.** Compose and Aspire run Keycloak in development mode (`start-dev`, HTTP, in-memory database, demo users). [`deploy/production`](deploy/production/README.md) is the production deployment:
+
+- `start --optimized` on an image built with `kc.sh build`.
+- HTTPS only, with HTTP disabled, and `sslRequired=all`.
+- Its own PostgreSQL database.
+- SMTP, with e-mail verification and password reset turned on.
+- A realm without demo users (`deploy/production/keycloak/realm-export.json`).
+- Every secret read from a file.
 
 ### Personal data
 
@@ -604,8 +617,19 @@ See [docs/privacy/personal-data.md](docs/privacy/personal-data.md) for the full 
   - The user (`DELETE /api/v1/identity/users/me`) or a tenant admin (`DELETE /api/v1/identity/users/{subjectId}`) can erase a profile.
   - Identity anonymizes the profile and publishes `identity.user-erased` in the same transaction.
   - Catalog anonymizes its seller copy when it consumes the event.
-  - The Keycloak account itself is disabled or deleted in Keycloak.
-- **Retention:** delivered outbox rows are purged after 7 days.
+  - Identity consumes its own event and deletes the Keycloak account through Keycloak's admin REST API. With `Modules:Identity:AccountErasure:Mode=Disable` it disables the account and logs it out instead.
+    - It authenticates as the `modular-monolith-admin` service account (client credentials, token cached), which holds only `realm-management/manage-users`.
+    - The call runs outside the database transaction. When Keycloak is down, the outbox retries it and finally dead-letters it for replay. An account that is already gone counts as success.
+- **Retention:** delivered outbox rows after 7 days, dead letters after 30, audit IP addresses after 90 days, audit rows after 365.
+
+### Audit-log retention
+
+The application role stays append-only on `audit_log`: no `UPDATE` or `DELETE` grant. Migration `005_*_audit_retention.sql` adds `<schema>.purge_audit_log(delete_before, strip_ip_before, batch_size)`. It's a `SECURITY DEFINER` function owned by the schema owner, the only thing the application role may execute on the audit log. It does two things in batches:
+
+- Sets `ip_address` to null on rows older than `Retention:AuditIpAddressDays` (default 90).
+- Deletes rows older than `Retention:AuditLogDays` (default 365). It refuses to delete anything younger than 30 days, whatever the caller passes.
+
+The daily `RetentionJob` calls it per module. Set `AuditLogDays` to your legal retention requirement (0 keeps rows forever).
 
 ### Secrets
 
@@ -616,7 +640,7 @@ See [docs/privacy/personal-data.md](docs/privacy/personal-data.md) for the full 
 | Compose | Docker secrets from `deploy/secrets/` (git-ignored, random values from `init-secrets`), mounted under `/run/secrets` |
 | Production | Any secret store that can write files: Kubernetes Secrets, External Secrets Operator, Secrets Store CSI driver, HashiCorp Vault or OpenBao Agent. The host reads every file in `Secrets:Directory` (default `/run/secrets`) as one configuration key, with `__` as the separator, overriding all other sources. Restart after rotation |
 
-The only credential still read from the environment is Keycloak's bootstrap admin in compose (`deploy/.env`), because Keycloak has no file option for it. Data Protection keys are stored in PostgreSQL (`platform.data_protection_keys`) and encrypted with a certificate outside Development (`DataProtection:CertificatePath` / `CertificatePassword`, both from the secret store).
+Keycloak itself only reads options from the environment. Compose therefore starts it through a small wrapper that exports the secret files (bootstrap admin password, service-account secret) to the Keycloak process only, so no credential sits in `deploy/.env` or in `docker inspect`. Data Protection keys are stored in PostgreSQL (`platform.data_protection_keys`) and encrypted with a certificate outside Development (`DataProtection:CertificatePath` / `CertificatePassword`, both from the secret store).
 
 ### Supply chain
 
@@ -665,7 +689,7 @@ Every section is a strongly typed options class with an `IValidateOptions<T>` va
 | `Authentication` | `Authority` is an absolute URL, https unless `RequireHttpsMetadata=false` (development only); audience and web client id set |
 | `Tenancy` | Claim type set; valid default tenant when the fallback is enabled; `RootDomain` is a host name |
 | `Outbox` | Batch size, batches per run, attempts, delays, lease and metrics interval within range; cron has 5 or 6 fields |
-| `Retention` | Days are 0 (keep) or positive; inbox kept at least 7 days; batch size and cron valid |
+| `Retention` | Days are 0 (keep) or positive; inbox and dead letters kept at least 7 days; audit rows at least 30 days; audit IP addresses no longer than audit rows; batch size and cron valid |
 | `Localization` | At least one known culture |
 | `RateLimiting` | Permit limit and window within range |
 | `Http` | Timeout, body size, HTTPS port, HSTS max-age, shutdown drain and shutdown timeout within range |
@@ -675,7 +699,7 @@ Every section is a strongly typed options class with an `IValidateOptions<T>` va
 | `Observability` | `TraceSampleRatio` between 0 and 1 (checked at startup); `CollectorEndpoint`, `LokiUrl` optional |
 | `Secrets` | `Directory`: secret files (one key per file, default `/run/secrets`); a missing directory is ignored |
 | Permissions | Names and scopes are lowercase dot-separated identifiers, at least one role, no duplicates (checked when the authorization options are built) |
-| `Modules:Catalog`, `Modules:Identity` | Cache and output-cache TTLs within range; URLs are absolute http(s) |
+| `Modules:Catalog`, `Modules:Identity` | Cache and output-cache TTLs within range; URLs are absolute http(s); with `AccountErasure:Enabled` (default) the authority has the form `.../realms/<realm>` and `AccountErasure:ClientId` / `ClientSecret` are set, and `Mode` is `Delete` or `Disable` |
 
 Behind a TLS-terminating load balancer or ingress, set `ReverseProxy__KnownNetworks__0=<ingress CIDR>` so the client IP (rate limiting, audit) and the https scheme are taken from `X-Forwarded-*`.
 
@@ -692,7 +716,7 @@ Privileges per table (see `003_*_grants.sql` and `001_platform.sql`):
 | Table | Application privileges |
 |---|---|
 | Business tables (`products`, `sellers`, `user_profiles`) | `SELECT, INSERT, UPDATE` (soft delete; no `DELETE`) |
-| `audit_log` | `SELECT, INSERT` (append-only) |
+| `audit_log` | `SELECT, INSERT` (append-only), plus `EXECUTE` on `purge_audit_log` (retention) |
 | `outbox_messages` | `SELECT, INSERT, UPDATE, DELETE` (dispatch and retention) |
 | `inbox_messages` | `SELECT, INSERT, DELETE` (retention) |
 | `platform.data_protection_keys` | `SELECT, INSERT` |
@@ -735,7 +759,7 @@ Compose also defines CPU and memory limits for every service and a readiness hea
 
 1. Create `src/Modules/<Name>/ModularMonolith.<Name>` and `ModularMonolith.<Name>.Contracts`. Copy a csproj; reference Kernel, Shared.Infrastructure and only other modules' `*.Contracts`.
 2. Add a public `<Name>Module : IModule` with a unique `Schema`, and an internal `<Name>Permissions` class registered with `services.AddPermissions(...)` in `AddServices` (add its scopes to the Keycloak clients).
-3. Add `Infrastructure/Migrations/001_<name>.sql` with the tables. Include `tenant_id`, `version` and the RLS policy, plus `outbox_messages`, `inbox_messages` and `audit_log` with the columns of Catalog's `001` and `002` scripts, and explicit grants to `$app_role$` like Catalog's `003` script (no schema-wide grants). Never edit an applied migration; add the next numbered script instead.
+3. Add `Infrastructure/Migrations/001_<name>.sql` with the tables. Include `tenant_id`, `version` and the RLS policy, plus `outbox_messages`, `inbox_messages` and `audit_log` with the columns of Catalog's `001` and `002` scripts, and explicit grants to `$app_role$` like Catalog's `003` script (no schema-wide grants), and the audit-retention function of Catalog's `005` script. Never edit an applied migration; add the next numbered script instead.
 4. Add `new <Name>Module()` to the module list in `Host/Program.cs` and a project reference in the Host csproj.
 
 ---

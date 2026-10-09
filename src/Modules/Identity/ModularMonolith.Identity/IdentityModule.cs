@@ -54,5 +54,22 @@ public sealed class IdentityModule : IModule
                 resilience.CircuitBreaker.BreakDuration = TimeSpan.FromSeconds(15);
             });
         services.AddHealthChecks().AddCheck<KeycloakHealthCheck>("keycloak", tags: ["ready"]);
+
+        AddKeycloakAdminApi(services);
+    }
+
+    // Admin REST API for account erasure: a service-account token (client credentials, cached) on every
+    // request. The calls are idempotent (DELETE, PUT, logout), so standard retries are safe.
+    private static void AddKeycloakAdminApi(IServiceCollection services)
+    {
+        services.AddSingleton<KeycloakAdminTokenProvider>();
+        services.AddTransient<KeycloakAdminAuthenticationHandler>();
+        services.AddHttpClient(KeycloakAdminTokenProvider.HttpClientName)
+            .AddStandardResilienceHandler(resilience => resilience.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(10));
+        services.AddRefitClient<IKeycloakAdminApi>()
+            .ConfigureHttpClient((provider, client) =>
+                client.BaseAddress = provider.GetRequiredService<IOptions<IdentityOptions>>().Value.ServerUrl)
+            .AddHttpMessageHandler<KeycloakAdminAuthenticationHandler>()
+            .AddStandardResilienceHandler(resilience => resilience.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(15));
     }
 }

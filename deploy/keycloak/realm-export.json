@@ -608,9 +608,41 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "modular-monolith-admin",
+      "name": "ModularMonolith service account: Keycloak account erasure (admin REST API)",
+      "description": "Client credentials only. Its service account holds realm-management/manage-users and nothing else.",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${KEYCLOAK_ADMIN_CLIENT_SECRET}",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "fullScopeAllowed": true,
+      "protocol": "openid-connect",
+      "attributes": {
+        "oauth2.device.authorization.grant.enabled": "false"
+      },
+      "defaultClientScopes": [
+        "basic"
+      ],
+      "optionalClientScopes": []
     }
   ],
   "users": [
+    {
+      "username": "service-account-modular-monolith-admin",
+      "enabled": true,
+      "serviceAccountClientId": "modular-monolith-admin",
+      "clientRoles": {
+        "realm-management": [
+          "manage-users"
+        ]
+      }
+    },
     {
       "username": "alice",
       "enabled": true,

@@ -9,9 +9,16 @@ using Npgsql;
 namespace ModularMonolith.Shared.Infrastructure.Messaging;
 
 /// <summary>
-/// Daily Hangfire job that purges old rows from a module's outbox (delivered messages only) and inbox.
-/// Deletes run in small batches to keep locks short. The audit log is append-only for the application
-/// (no DELETE grant); its retention is a database maintenance task run with owner rights.
+/// Daily Hangfire job that applies the retention policy to a module's system tables:
+/// <list type="bullet">
+/// <item>outbox: delivered messages and dead letters;</item>
+/// <item>inbox: deduplication records;</item>
+/// <item>audit log: removes client IP addresses after <c>AuditIpAddressDays</c> and whole rows after
+/// <c>AuditLogDays</c>. The application role stays append-only on <c>audit_log</c> (no UPDATE or DELETE
+/// grant): it can only call the module's <c>purge_audit_log</c> function, a SECURITY DEFINER function owned
+/// by the schema owner that touches nothing younger than 30 days.</item>
+/// </list>
+/// Deletes run in small batches to keep locks short.
 /// </summary>
 public sealed class RetentionJob(
     NpgsqlDataSource dataSource,
@@ -37,10 +44,48 @@ public sealed class RetentionJob(
             await PurgeAsync($"{quoted}.outbox_messages", "status = 'processed' and processed_at < @Cutoff", now.AddDays(-settings.ProcessedOutboxDays), settings.BatchSize, cancellationToken);
         }
 
+        if (settings.DeadLetterDays > 0)
+        {
+            await PurgeAsync($"{quoted}.outbox_messages", "status = 'dead' and occurred_at < @Cutoff", now.AddDays(-settings.DeadLetterDays), settings.BatchSize, cancellationToken);
+        }
+
         if (settings.InboxDays > 0)
         {
             await PurgeAsync($"{quoted}.inbox_messages", "processed_at < @Cutoff", now.AddDays(-settings.InboxDays), settings.BatchSize, cancellationToken);
         }
+
+        if (settings.AuditLogDays > 0 || settings.AuditIpAddressDays > 0)
+        {
+            await PurgeAuditLogAsync(
+                quoted,
+                settings.AuditLogDays > 0 ? now.AddDays(-settings.AuditLogDays) : null,
+                settings.AuditIpAddressDays > 0 ? now.AddDays(-settings.AuditIpAddressDays) : null,
+                settings.BatchSize,
+                cancellationToken);
+        }
+    }
+
+    private async Task PurgeAuditLogAsync(string quotedSchema, DateTimeOffset? deleteBefore, DateTimeOffset? stripIpBefore, int batchSize, CancellationToken cancellationToken)
+    {
+        // Each call deletes and anonymizes at most one batch each; repeat until nothing is left.
+        var table = $"{quotedSchema}.audit_log";
+        var sql = $"select {quotedSchema}.purge_audit_log(@DeleteBefore, @StripIpBefore, @BatchSize)";
+        long total = 0;
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        while (true)
+        {
+            var affected = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+                sql,
+                new { DeleteBefore = deleteBefore, StripIpBefore = stripIpBefore, BatchSize = batchSize },
+                cancellationToken: cancellationToken));
+            total += affected;
+            if (affected == 0)
+            {
+                break;
+            }
+        }
+
+        logger.RetentionPurged(total, table);
     }
 
     private async Task PurgeAsync(string table, string predicate, DateTimeOffset cutoff, int batchSize, CancellationToken cancellationToken)

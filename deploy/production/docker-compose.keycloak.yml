@@ -1,0 +1,112 @@
+# Production-style Keycloak (reference deployment). Unlike the development stack (start-dev, HTTP, H2,
+# demo users) this runs:
+#   - `start --optimized` with TLS only (HTTP disabled) and sslRequired=all in the realm;
+#   - its own PostgreSQL database;
+#   - the production realm (deploy/production/keycloak/realm-export.json): no demo users, e-mail
+#     verification and password reset through SMTP, the erasure service account;
+#   - every secret from a file (Docker secrets under /run/secrets), none in environment files.
+#
+#   cp deploy/production/.env.example deploy/production/.env      # host names, SMTP server (no secrets)
+#   # put the secret files listed under "secrets:" into deploy/production/secrets/ (git-ignored)
+#   docker compose -f deploy/production/docker-compose.keycloak.yml --env-file deploy/production/.env up -d --build
+#
+# Point the API at it: Authentication__Authority=https://<KEYCLOAK_HOSTNAME>/realms/modular-monolith
+# (RequireHttpsMetadata stays true) and Modules__Identity__AccountErasure__ClientSecret = the same
+# keycloak_admin_client_secret.
+name: modular-monolith-identity
+
+secrets:
+  keycloak_tls_certificate:
+    file: ./secrets/keycloak_tls_certificate.pem
+  keycloak_tls_key:
+    file: ./secrets/keycloak_tls_key.pem
+  keycloak_db_password:
+    file: ./secrets/keycloak_db_password
+  keycloak_bootstrap_admin_password:
+    file: ./secrets/keycloak_bootstrap_admin_password
+  keycloak_admin_client_secret:
+    file: ./secrets/keycloak_admin_client_secret
+  smtp_password:
+    file: ./secrets/smtp_password
+
+services:
+  keycloak:
+    build:
+      context: ./keycloak
+    image: modular-monolith-keycloak:26.3.3
+    # Keycloak reads options from the environment, not from files: a tiny wrapper exports the secret files
+    # just for the Keycloak process (they never appear in `docker inspect`). $$ escapes compose interpolation.
+    entrypoint: [ "/bin/bash", "-c" ]
+    command:
+      - |
+        set -euo pipefail
+        export KC_DB_PASSWORD="$$(< /run/secrets/keycloak_db_password)"
+        export KC_BOOTSTRAP_ADMIN_PASSWORD="$$(< /run/secrets/keycloak_bootstrap_admin_password)"
+        export KEYCLOAK_ADMIN_CLIENT_SECRET="$$(< /run/secrets/keycloak_admin_client_secret)"
+        export KC_SMTP_PASSWORD="$$(< /run/secrets/smtp_password)"
+        exec /opt/keycloak/bin/kc.sh start --optimized --import-realm
+    environment:
+      # Public URL of Keycloak (the token issuer). Must match what browsers and the API use.
+      KC_HOSTNAME: https://${KEYCLOAK_HOSTNAME:?set KEYCLOAK_HOSTNAME in .env}
+      KC_HTTP_ENABLED: "false"
+      KC_HTTPS_PORT: "8443"
+      KC_HTTPS_CERTIFICATE_FILE: /run/secrets/keycloak_tls_certificate
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /run/secrets/keycloak_tls_key
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      # Temporary bootstrap admin: create a personal admin account with MFA, then delete this one.
+      KC_BOOTSTRAP_ADMIN_USERNAME: bootstrap-admin
+      KC_LOG_LEVEL: info
+      # Realm import placeholders (non-secret).
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:?set APP_PUBLIC_URL in .env}
+      KC_SMTP_HOST: ${KC_SMTP_HOST:?set KC_SMTP_HOST in .env}
+      KC_SMTP_PORT: ${KC_SMTP_PORT:-587}
+      KC_SMTP_FROM: ${KC_SMTP_FROM:?set KC_SMTP_FROM in .env}
+      KC_SMTP_USER: ${KC_SMTP_USER:?set KC_SMTP_USER in .env}
+    secrets:
+      - keycloak_tls_certificate
+      - keycloak_tls_key
+      - keycloak_db_password
+      - keycloak_bootstrap_admin_password
+      - keycloak_admin_client_secret
+      - smtp_password
+    ports:
+      - "443:8443"
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    # The image has bash but no curl; probe the TLS port.
+    healthcheck:
+      test: [ "CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8443" ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "2.00", memory: 2G }
+        reservations: { memory: 1G }
+
+  keycloak-db:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD_FILE: /run/secrets/keycloak_db_password
+    secrets:
+      - keycloak_db_password
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U keycloak -d keycloak" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - keycloak-db-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "1.00", memory: 1G }
+
+volumes:
+  keycloak-db-data:

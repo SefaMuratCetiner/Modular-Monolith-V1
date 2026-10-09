@@ -46,17 +46,21 @@ function Set-Secret([string] $name, [string] $value) {
 $ownerPassword = Get-OrCreate "postgres_password"
 $apiPassword = Get-OrCreate "app_db_password"
 Get-OrCreate "grafana_admin_password" | Out-Null
+Get-OrCreate "keycloak_admin_password" | Out-Null
+$erasureSecret = Get-OrCreate "keycloak_admin_client_secret"
 
 # Derived secrets, named after the configuration keys they set inside the containers.
 Set-Secret "ConnectionStrings__postgres-migrations" "Host=postgres;Port=5432;Database=modular_monolith;Username=postgres;Password=$ownerPassword"
 Set-Secret "ConnectionStrings__postgres" "Host=postgres;Port=5432;Database=modular_monolith;Username=modular_monolith_api;Password=$apiPassword"
 Set-Secret "Migrations__ApplicationLoginPassword" $apiPassword
+Set-Secret "Modules__Identity__AccountErasure__ClientSecret" $erasureSecret
 
 if (-not $SkipUserSecrets) {
     $hostProject = Join-Path $PSScriptRoot "../src/Host/ModularMonolith.Host"
     dotnet user-secrets --project $hostProject set "ConnectionStrings:postgres-migrations" "Host=localhost;Port=5432;Database=modular_monolith;Username=postgres;Password=$ownerPassword" | Out-Null
     dotnet user-secrets --project $hostProject set "ConnectionStrings:postgres" "Host=localhost;Port=5432;Database=modular_monolith;Username=modular_monolith_api;Password=$apiPassword" | Out-Null
     dotnet user-secrets --project $hostProject set "Migrations:ApplicationLoginPassword" $apiPassword | Out-Null
+    dotnet user-secrets --project $hostProject set "Modules:Identity:AccountErasure:ClientSecret" $erasureSecret | Out-Null
 }
 
 Write-Host "Secrets are in $secrets (git-ignored)." -ForegroundColor Green

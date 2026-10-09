@@ -10,10 +10,11 @@ Update this file in the same pull request as any change that stores a new person
 | E-mail address | `identity.user_profiles.email` | Contact and uniqueness per tenant | Until erased | `identity` section | Replaced by `erased-<id>@erased.invalid`, row soft-deleted |
 | Display name | `identity.user_profiles.display_name` | Shown to other users | Until erased | `identity` section | Replaced by `Erased user` |
 | Display name (copy) | `catalog.sellers.display_name` | Seller name on product listings | Until erased | `catalog` section | Replaced by `Erased user` (`identity.user-erased` consumer) |
-| Display name (in transit) | `identity.outbox_messages.payload` (`identity.user-registered`) | Event delivery | Delivered rows purged after `Retention:ProcessedOutboxDays` (7) | n/a | Purged by retention |
+| Display name (in transit) | `identity.outbox_messages.payload` (`identity.user-registered`) | Event delivery | Delivered rows after `Retention:ProcessedOutboxDays` (7), dead letters after `Retention:DeadLetterDays` (30) | n/a | Purged by retention |
 | Subject id (`sub`) | All modules (`subject_id`, `seller_id`, `created_by`, `audit_log.user_id`) | Pseudonymous link to the identity provider | Kept | `subjectId` | Kept: it identifies no one without Keycloak |
-| IP address | `*.audit_log.ip_address` | Security investigations | Audit retention (set per deployment) | No | Kept (legitimate interest; document it in your record of processing) |
-| Account, credentials, MFA | Keycloak | Authentication | Keycloak | Keycloak account console | Disable or delete the user in Keycloak |
+| IP address | `*.audit_log.ip_address` | Security investigations | Removed after `Retention:AuditIpAddressDays` (90); the row is deleted after `Retention:AuditLogDays` (365) | No | Kept until then (legitimate interest; document it in your record of processing) |
+| Account, username, e-mail, name, credentials, OTP secret, sessions | Keycloak | Authentication | Until erased | Keycloak account console | Deleted (default) or disabled and logged out through the admin REST API by Identity's `identity.user-erased` consumer |
+| Login events | Keycloak | Investigations | 30 days (realm `eventsExpiration`) | No | Expire |
 
 What is **not** stored any more:
 
@@ -30,7 +31,8 @@ What is **not** stored any more:
 | Logs | `PersonalDataDestructuringPolicy` redacts marked properties of objects logged with `{@Value}`. `PersonalDataMaskingEnricher` masks properties with sensitive names (`Email`, `DisplayName`, `Password`, tokens, …) and e-mail addresses inside any string, for every sink |
 | Exceptions | Npgsql leaves parameter values and row details out of exception messages. Keep `Include Error Detail` off in connection strings |
 | Right of access / portability | `GET /api/v1/privacy/me/personal-data` combines every module's `IPersonalDataExporter` into one JSON document |
-| Right to erasure | `DELETE /api/v1/identity/users/me` (self-service) or `DELETE /api/v1/identity/users/{subjectId}` (tenant admin). Identity anonymizes its profile in the command transaction and publishes `identity.user-erased` through the outbox in the same transaction. Every other module consumes it (inbox-protected) and anonymizes its copy |
+| Right to erasure | `DELETE /api/v1/identity/users/me` (self-service) or `DELETE /api/v1/identity/users/{subjectId}` (tenant admin). Identity anonymizes its profile in the command transaction and publishes `identity.user-erased` through the outbox in the same transaction. Every other module consumes it (inbox-protected) and anonymizes its copy. Identity consumes it too and deletes the Keycloak account through the admin REST API (`Modules:Identity:AccountErasure`) |
+| Retention | `RetentionJob` (daily): delivered outbox rows, dead letters, inbox rows, audit IP addresses and old audit rows. Audit rows go through the `purge_audit_log` SECURITY DEFINER function, so the application never gets UPDATE or DELETE on the audit log |
 
 ## Adding personal data to a module
 
