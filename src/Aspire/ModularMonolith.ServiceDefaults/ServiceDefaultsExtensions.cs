@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Http;
@@ -14,7 +15,8 @@ namespace ModularMonolith.ServiceDefaults;
 /// <summary>
 /// Cross-cutting defaults for every runnable project (resilience pipelines are per dependency, not global).
 /// <list type="bullet">
-/// <item>Traces: OTLP (Aspire dashboard or Tempo) plus an optional dedicated Tempo exporter.</item>
+/// <item>Traces: OTLP (Aspire dashboard or the OpenTelemetry Collector), parent-based ratio head sampling.</item>
+/// <item>Resource: service.name, service.version, service.instance.id, deployment.environment.name.</item>
 /// <item>Metrics: one pipeline, scraped by Prometheus on <c>/metrics</c> (optionally also pushed via OTLP).</item>
 /// <item>Logs: handled by Serilog in the host (console, Loki and optional OTLP).</item>
 /// </list>
@@ -59,11 +61,34 @@ public static class ServiceDefaultsExtensions
         return app;
     }
 
+    /// <summary>Gets the application version reported as <c>service.version</c> (informational version incl. commit).</summary>
+    /// <returns>The version.</returns>
+    public static string ServiceVersion()
+        => Assembly.GetEntryAssembly()?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0";
+
     private static void ConfigureOpenTelemetry(this IHostApplicationBuilder builder)
     {
         var serviceName = builder.Environment.ApplicationName;
+        var environmentName = builder.Environment.EnvironmentName;
+        var configuration = builder.Configuration;
+
+        // Head sampling: keep this fraction of new traces (children follow their parent's decision).
+        // With a collector in front of the backend, keep 1.0 here and let its tail sampling decide
+        // (errors and slow traces are always kept); lower it only to cut volume at the source.
+        var sampleRatio = configuration.GetValue("Observability:TraceSampleRatio", 1.0);
+        if (sampleRatio is < 0 or > 1)
+        {
+            throw new InvalidOperationException("Observability:TraceSampleRatio must be between 0 and 1.");
+        }
+
         builder.Services.AddOpenTelemetry()
-            .ConfigureResource(resource => resource.AddService(serviceName))
+            .ConfigureResource(resource => resource
+                .AddService(serviceName, serviceVersion: ServiceVersion(), serviceInstanceId: Environment.MachineName)
+                .AddAttributes(
+                [
+                    new KeyValuePair<string, object>("deployment.environment.name", environmentName),
+                    new KeyValuePair<string, object>("deployment.environment", environmentName), // older backends
+                ]))
             .WithMetrics(metrics => metrics
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
@@ -71,28 +96,29 @@ public static class ServiceDefaultsExtensions
                 .AddMeter("ModularMonolith.*", "Npgsql")
                 .AddPrometheusExporter())
             .WithTracing(tracing => tracing
+                .SetSampler(new ParentBasedSampler(new TraceIdRatioBasedSampler(sampleRatio)))
                 .AddSource(serviceName, "ModularMonolith.*", "Npgsql")
                 .AddAspNetCoreInstrumentation(options => options.Filter = context => !IsInfrastructurePath(context.Request.Path))
                 .AddHttpClientInstrumentation());
 
-        var configuration = builder.Configuration;
         if (!string.IsNullOrWhiteSpace(configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]))
         {
             builder.Services.ConfigureOpenTelemetryTracerProvider(tracing => tracing.AddOtlpExporter());
 
-            // Only enable when the OTLP receiver accepts metrics (Aspire dashboard); Tempo does not.
+            // Only enable when the OTLP receiver accepts metrics (Aspire dashboard); metrics are otherwise scraped.
             if (configuration.GetValue<bool>("Observability:OtlpMetrics"))
             {
                 builder.Services.ConfigureOpenTelemetryMeterProvider(metrics => metrics.AddOtlpExporter());
             }
         }
 
-        // Optional second trace exporter, e.g. Tempo while the Aspire dashboard receives the default one.
-        var tempoEndpoint = configuration["Observability:TempoEndpoint"];
-        if (Uri.TryCreate(tempoEndpoint, UriKind.Absolute, out var tempoUri))
+        // Optional second trace destination: the OpenTelemetry Collector (which tail-samples and forwards
+        // to Tempo) while the default OTLP exporter feeds the Aspire dashboard.
+        var collectorEndpoint = configuration["Observability:CollectorEndpoint"];
+        if (Uri.TryCreate(collectorEndpoint, UriKind.Absolute, out var collectorUri))
         {
             builder.Services.ConfigureOpenTelemetryTracerProvider(tracing =>
-                tracing.AddOtlpExporter("tempo", options => options.Endpoint = tempoUri));
+                tracing.AddOtlpExporter("collector", options => options.Endpoint = collectorUri));
         }
     }
 

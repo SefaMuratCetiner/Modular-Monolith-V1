@@ -14,6 +14,7 @@ namespace ModularMonolith.Catalog.Contracts;
 /// <param name="Price">The price amount.</param>
 /// <param name="Currency">The ISO 4217 currency code.</param>
 /// <param name="SellerId">The subject id of the user who created the product.</param>
+[IntegrationEvent("catalog.product-created", version: 1)]
 public sealed record ProductCreatedIntegrationEvent(
     Guid EventId,
     DateTimeOffset OccurredAt,

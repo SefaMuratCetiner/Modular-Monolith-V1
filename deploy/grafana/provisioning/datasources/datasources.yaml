@@ -37,7 +37,14 @@ datasources:
     url: http://loki:3100
     jsonData:
       derivedFields:
+        # Logs pushed directly by the Serilog Loki sink (JSON line).
         - name: TraceId
           datasourceUid: tempo
           matcherRegex: '"TraceId":"(\w+)"'
+          url: "$${__value.raw}"
+        # Logs arriving through the OpenTelemetry Collector (trace_id as structured metadata).
+        - name: trace_id
+          datasourceUid: tempo
+          matcherType: label
+          matcherRegex: trace_id
           url: "$${__value.raw}"

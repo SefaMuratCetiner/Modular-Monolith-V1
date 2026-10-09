@@ -47,13 +47,21 @@ var keycloakHttp = keycloak.GetEndpoint("http");
 var tempo = builder.AddContainer("tempo", "grafana/tempo", "2.8.2")
     .WithBindMount("../../../deploy/grafana/tempo.yaml", "/etc/tempo.yaml", isReadOnly: true)
     .WithArgs("-config.file=/etc/tempo.yaml")
-    .WithHttpEndpoint(targetPort: 3200, name: "http")
-    .WithEndpoint(targetPort: 4317, name: "otlp", scheme: "http");
+    .WithHttpEndpoint(targetPort: 3200, name: "http");
 
 var loki = builder.AddContainer("loki", "grafana/loki", "3.5.3")
     .WithBindMount("../../../deploy/grafana/loki.yaml", "/etc/loki/local-config.yaml", isReadOnly: true)
     .WithArgs("-config.file=/etc/loki/local-config.yaml")
     .WithHttpEndpoint(targetPort: 3100, name: "http");
+
+// The collector tail-samples traces and forwards them to Tempo; logs go to Loki (OTLP).
+// The Aspire dashboard still receives everything through the default OTLP exporter.
+var collector = builder.AddContainer("otel-collector", "otel/opentelemetry-collector-contrib", "0.161.0")
+    .WithBindMount("../../../deploy/otel-collector/config.yaml", "/etc/otelcol/config.yaml", isReadOnly: true)
+    .WithArgs("--config=/etc/otelcol/config.yaml")
+    .WithEndpoint(targetPort: 4317, name: "otlp", scheme: "http")
+    .WaitFor(tempo)
+    .WaitFor(loki);
 
 var prometheus = builder.AddContainer("prometheus", "prom/prometheus", "v3.5.0")
     .WithBindMount("../../../deploy/grafana/prometheus.aspire.yaml", "/etc/prometheus/prometheus.yml", isReadOnly: true)
@@ -86,8 +94,7 @@ builder.AddProject<Projects.ModularMonolith_Host>("api")
     .WithEnvironment("ConnectionStrings__postgres", apiConnectionString)
     .WithReference(cache)
     .WithEnvironment("Authentication__Authority", ReferenceExpression.Create($"{keycloakHttp}/realms/modular-monolith"))
-    .WithEnvironment("Observability__LokiUrl", loki.GetEndpoint("http"))
-    .WithEnvironment("Observability__TempoEndpoint", tempo.GetEndpoint("otlp"))
+    .WithEnvironment("Observability__CollectorEndpoint", collector.GetEndpoint("otlp"))
     .WithEnvironment("Observability__OtlpMetrics", "true")
     .WithEnvironment("Observability__OtlpLogs", "true")
     .WithHttpHealthCheck("/health/ready")

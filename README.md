@@ -35,6 +35,9 @@ dotnet run --project src/Aspire/ModularMonolith.AppHost      # runs "migrations"
 dotnet run --project src/Host/ModularMonolith.Host -- migrate   # schema owner: DDL, roles, grants; then exits
 dotnet run --project src/Host/ModularMonolith.Host              # least-privileged login: DML only
 
+# Export (or verify in CI with --check) the committed OpenAPI contract; nothing is started
+dotnet run --project src/Host/ModularMonolith.Host -- openapi docs/openapi/modular-monolith.v1.json
+
 # Or without Aspire (CI-like)
 copy deploy\.env.example deploy\.env   # then edit the passwords
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.yml up --build
@@ -136,9 +139,11 @@ ModularMonolithV1/
 ├── .editorconfig                    # formatting, style, naming, analyzer severities
 ├── global.json  NuGet.Config  Dockerfile  .dockerignore  LICENSE
 ├── .template.config/template.json   # `dotnet new modular-monolith`
+├── docs/openapi/                    # committed OpenAPI contract (modular-monolith.v1.json) + rules
 ├── deploy/
 │   ├── docker-compose.yml  docker-compose.override.yml  .env.example
 │   ├── keycloak/realm-export.json   # realm, clients, tenant_id + roles mappers, demo users
+│   ├── otel-collector/config.yaml   # OTLP in; memory limit, tail sampling, batching; traces -> Tempo, logs -> Loki
 │   └── grafana/
 │       ├── tempo.yaml  loki.yaml  prometheus.yaml  prometheus.aspire.yaml
 │       └── provisioning/{datasources,dashboards}/...
@@ -153,6 +158,7 @@ ModularMonolithV1/
     │   │                                       # KeyRing (Data Protection),
     │   │                                       # *Options + *OptionsValidator
     │   ├── Operations/                         # operator endpoints: outbox dead-letter list and replay
+    │   ├── OpenApi/                            # `openapi [--check]` command (contract export)
     │   ├── Migrations/                         # `migrate` command, Hangfire schema step
     │   └── appsettings*.json  ModularMonolith.Host.http
     ├── Shared/
@@ -457,6 +463,7 @@ create policy tenant_isolation on catalog.products
 | One trace end to end | The producer's W3C `traceparent` is stored with the message; consumer spans are its children |
 | Retention | Daily Hangfire job per module (`Retention:*`): delivered outbox rows after 7 days, inbox rows after 30 days; dead letters are never purged. The audit log is append-only for the application, so its retention is a DBA task run with owner rights |
 | Safe deserialization | Only types exported by registered `*.Contracts` assemblies can be loaded; there is no `dynamic` dispatch |
+| Versioned contracts | Every integration event declares `[IntegrationEvent("module.event-name", version)]`; the outbox stores `module.event-name.vN`, never a CLR type name, so contract classes can be renamed or moved. Breaking changes bump the version and ship an `IIntegrationEventUpcaster` (vN to vN+1) in the publishing module; stored older messages are upcast step by step before deserialization. Missing attributes, duplicate names and gaps in an upcaster chain stop the host at startup. Rows from before versioning (CLR names) are read as v1 |
 
 ## Data access and caching
 
@@ -472,7 +479,10 @@ create policy tenant_isolation on catalog.products
 
 ## Observability (one pipeline per signal)
 
-- **Traces** go out over OTLP: to the Aspire dashboard under Aspire, and to Tempo under compose. `Observability:TempoEndpoint` adds Tempo alongside the dashboard.
+- **Resource attributes** on every signal: `service.name`, `service.version` (assembly informational version, `+commit` in git builds), `service.instance.id` and `deployment.environment.name`. `OTEL_RESOURCE_ATTRIBUTES` can add more.
+- **OpenTelemetry Collector** (`deploy/otel-collector/config.yaml`, contrib distribution) sits between the app and the backends. It applies a memory limit, batching and tail sampling, then sends traces to Tempo and logs to Loki over OTLP. Compose sends everything to it; under Aspire the dashboard gets the default OTLP stream and `Observability:CollectorEndpoint` sends a copy to the collector.
+- **Sampling strategy.** The app does parent-based ratio head sampling (`Observability:TraceSampleRatio`, default 1.0, so the collector sees complete traces). The collector keeps every trace with an error, every trace slower than 500 ms and 25% of the rest. To cut volume at the source, lower the ratio; error and latency guarantees then only apply to head-sampled traces.
+- **Traces** go out over OTLP: to the Aspire dashboard under Aspire, and to the collector under compose.
 - **Metrics** are OpenTelemetry metrics exposed at `/metrics` for Prometheus. They can also be pushed over OTLP to the Aspire dashboard when `Observability:OtlpMetrics=true`.
 - **Custom metrics:**
   - `modmono.handler.duration`
@@ -483,7 +493,7 @@ create policy tenant_isolation on catalog.products
   - `modmono.db.slow_queries`
 - **Business metrics** (recorded only after commit, bounded tags): `modmono.catalog.products.created` (by currency), `modmono.catalog.products.price_changes`, `modmono.identity.users.registered`. Each module owns its meter (`ModularMonolith.Catalog`, `ModularMonolith.Identity`).
 - **Slow queries.** Every database command slower than `Database:SlowQueryThresholdMs` (default 500 ms) is logged as a warning with its SQL text (placeholders only, never parameter values), duration and trace id. It hooks Npgsql's activities, so Dapper, the outbox and Hangfire are all covered.
-- **Logs** go through Serilog to the console (asynchronous, bounded buffer that drops instead of blocking requests) and to Loki (`Observability:LokiUrl`). They also go to OTLP when `Observability:OtlpLogs=true`. Trace and span ids are included.
+- **Logs** go through Serilog to the console (asynchronous, bounded buffer that drops instead of blocking requests), to the collector (`Observability:CollectorEndpoint`, or the default OTLP endpoint with `Observability:OtlpLogs=true`) and optionally straight to Loki (`Observability:LokiUrl`, for setups without a collector). Trace and span ids, service version and environment are included.
 - **Grafana** datasources are provisioned with fixed UIDs and these links: Tempo → Loki, Loki → Tempo, Prometheus exemplars → Tempo. A starter dashboard is included.
 
 ## Security
@@ -519,7 +529,7 @@ create policy tenant_isolation on catalog.products
 | ETags and conditional requests | `GET /catalog/products/{id}` returns a strong `ETag` (`"{version}-{fingerprint}"`) and `Cache-Control: private, no-cache`; `If-None-Match` returns 304. `PUT .../price` accepts `If-Match` (stale: 412) or a body `version` (stale: 409); neither: 428 |
 | Output caching | `GET /catalog/products/{id}/price` is cached server-side in Valkey per tenant and query string (`TenantOutputCachePolicy`), evicted by tag when a price changes; only 200 responses are stored |
 | Tracing | Every response carries `traceresponse` (W3C) and `X-Trace-Id`; problem details carry `traceId` |
-| OpenAPI | Every endpoint documents its success and problem responses; the contract is served in Development at `/swagger/v1/swagger.json` (Swagger UI is never exposed outside Development) |
+| OpenAPI | Every endpoint documents its success and problem responses. The contract is exported with the `openapi` command to `docs/openapi/modular-monolith.v1.json`, committed and checked in CI with `openapi --check` (see `docs/openapi/README.md`). The Swagger UI and live JSON are only served in Development |
 | Transport | Outside Development: HTTPS redirection (308) and HSTS, except `/health/*` and `/metrics`; `X-Forwarded-*` honoured only from `ReverseProxy:KnownProxies` / `KnownNetworks`; secure-only cookies |
 | Headers | `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `Cross-Origin-Opener-Policy`, and a CSP (locked down for JSON, relaxed only for the Hangfire and Swagger UIs); no `Server` header; Brotli/gzip compression |
 
@@ -541,6 +551,7 @@ Every section is a strongly typed options class with an `IValidateOptions<T>` va
 | `Migrations` (migrate command only) | Owner connection string present; application role and login are SQL identifiers; a login password requires a login |
 | `DataProtection` | Application name set; a certificate file is required when `RequireEncryptionAtRest` (default outside Development) |
 | `ReverseProxy` | Proxies are IP addresses, networks are CIDR ranges, forward limit 1–10 |
+| `Observability` | `TraceSampleRatio` between 0 and 1 (checked at startup); `CollectorEndpoint`, `LokiUrl` optional |
 | `Modules:Catalog`, `Modules:Identity` | Cache and output-cache TTLs within range; URLs are absolute http(s) |
 
 Behind a TLS-terminating load balancer or ingress, set `ReverseProxy__KnownNetworks__0=<ingress CIDR>` so the client IP (rate limiting, audit) and the https scheme are taken from `X-Forwarded-*`.

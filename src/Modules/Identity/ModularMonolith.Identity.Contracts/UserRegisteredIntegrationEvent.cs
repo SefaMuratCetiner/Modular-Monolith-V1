@@ -12,6 +12,7 @@ namespace ModularMonolith.Identity.Contracts;
 /// <param name="SubjectId">The identity provider subject (<c>sub</c> claim).</param>
 /// <param name="Email">The e-mail address.</param>
 /// <param name="DisplayName">The display name.</param>
+[IntegrationEvent("identity.user-registered", version: 1)]
 public sealed record UserRegisteredIntegrationEvent(
     Guid EventId,
     DateTimeOffset OccurredAt,

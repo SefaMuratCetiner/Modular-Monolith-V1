@@ -39,8 +39,9 @@ services:
       ConnectionStrings__postgres: Host=postgres;Port=5432;Database=modular_monolith;Username=modular_monolith_api;Password=${APP_DB_PASSWORD:-dev-only-api-password}
       ConnectionStrings__cache: valkey:6379
       Authentication__Authority: http://keycloak:8080/realms/modular-monolith
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
-      Observability__LokiUrl: http://loki:3100
+      # Traces and logs go to the collector (tail sampling, routing to Tempo and Loki).
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      Observability__OtlpLogs: "true"
     depends_on:
       migrations:
         condition: service_completed_successfully
@@ -48,9 +49,7 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_started
-      tempo:
-        condition: service_started
-      loki:
+      otel-collector:
         condition: service_started
     ports:
       - "8081:8080"
@@ -117,12 +116,26 @@ services:
       resources:
         limits: { cpus: "1.00", memory: 1G }
 
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.161.0
+    command: [ "--config=/etc/otelcol/config.yaml" ]
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - ./otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      - tempo
+      - loki
+    deploy:
+      resources:
+        limits: { cpus: "0.50", memory: 512M }
+
   tempo:
     image: grafana/tempo:2.8.2
     command: [ "-config.file=/etc/tempo.yaml" ]
     ports:
       - "3200:3200"
-      - "4317:4317"
     volumes:
       - ./grafana/tempo.yaml:/etc/tempo.yaml:ro
     deploy:

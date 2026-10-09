@@ -1,0 +1,68 @@
+# OpenTelemetry Collector (contrib distribution, Apache-2.0).
+# The application sends traces and logs over OTLP; the collector protects the backends
+# (memory limit, batching), applies tail sampling and routes:
+#   traces -> Tempo (OTLP gRPC)      logs -> Loki (native OTLP endpoint)
+# Metrics are still pulled by Prometheus from the app's /metrics endpoint.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Refuse data before the collector runs out of memory (first in every pipeline).
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 20
+
+  # Sampling strategy: the app head-samples (Observability:TraceSampleRatio, default 1.0) and the
+  # collector decides per complete trace. Policies are OR-ed: a trace is kept if ANY matches.
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 50000
+    expected_new_traces_per_sec: 100
+    policies:
+      - name: keep-errors
+        type: status_code
+        status_code:
+          status_codes: [ ERROR ]
+      - name: keep-slow
+        type: latency
+        latency:
+          threshold_ms: 500
+      - name: baseline
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 25
+
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [ health_check ]
+  pipelines:
+    traces:
+      receivers: [ otlp ]
+      processors: [ memory_limiter, tail_sampling, batch ]
+      exporters: [ otlp/tempo ]
+    logs:
+      receivers: [ otlp ]
+      processors: [ memory_limiter, batch ]
+      exporters: [ otlphttp/loki ]

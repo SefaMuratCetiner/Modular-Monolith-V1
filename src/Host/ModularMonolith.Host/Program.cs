@@ -4,6 +4,7 @@ using Microsoft.FeatureManagement;
 using ModularMonolith.Catalog;
 using ModularMonolith.Host.Configuration;
 using ModularMonolith.Host.Migrations;
+using ModularMonolith.Host.OpenApi;
 using ModularMonolith.Identity;
 using ModularMonolith.ServiceDefaults;
 using ModularMonolith.Shared.Infrastructure;
@@ -37,18 +38,19 @@ builder.Services.AddFastEndpoints(options =>
     options.Assemblies = [.. modules.Select(module => module.Assembly), typeof(ApiConventions).Assembly];
     options.DisableAutoDiscovery = true;
 });
-if (builder.Environment.IsDevelopment())
+
+// The OpenAPI generator is registered everywhere (the `openapi` command needs it); the Swagger UI and
+// the JSON endpoint are only served in Development (see UseSwaggerGen below).
+builder.Services.SwaggerDocument(options =>
 {
-    builder.Services.SwaggerDocument(options =>
+    options.MaxEndpointVersion = 1;
+    options.DocumentSettings = settings =>
     {
-        options.MaxEndpointVersion = 1;
-        options.DocumentSettings = settings =>
-        {
-            settings.Title = "ModularMonolith API";
-            settings.Version = "v1";
-        };
-    });
-}
+        settings.DocumentName = OpenApiCommand.DocumentName;
+        settings.Title = "ModularMonolith API";
+        settings.Version = "1";
+    };
+});
 
 var app = builder.Build();
 
@@ -62,6 +64,12 @@ app.UseRateLimiter();                       // after tenancy: partitions by tena
 app.UseAuthorization();
 app.UseOutputCache();                       // after authorization: only authorized requests reach the cache
 app.UseFastEndpoints(ApiConventions.Apply); // /api/v{n}/..., shared JSON, problem-details validation errors
+
+// `openapi [--check] [path]`: export (or verify) the committed OpenAPI contract and exit; nothing is started.
+if (OpenApiCommand.IsRequested(args))
+{
+    return await OpenApiCommand.RunAsync(app, args);
+}
 if (app.Environment.IsDevelopment())
 {
     app.UseSwaggerGen();                    // contract: /swagger/v1/swagger.json, UI: /swagger

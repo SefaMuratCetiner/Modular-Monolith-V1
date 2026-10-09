@@ -133,6 +133,9 @@ public static class SharedInfrastructureExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        // Validate every integration event contract and upcaster chain now, not when a message arrives.
+        _ = services.GetRequiredService<IntegrationEventRegistry>();
+
         // Connect to Valkey asynchronously before any request can need it (never sync-over-async later).
         await services.GetRequiredService<ValkeyConnection>().ConnectAsync(cancellationToken);
 

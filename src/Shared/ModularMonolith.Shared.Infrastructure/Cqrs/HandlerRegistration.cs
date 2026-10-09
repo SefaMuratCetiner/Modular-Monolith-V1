@@ -36,6 +36,12 @@ internal static class HandlerRegistration
 
         foreach (var type in candidates)
         {
+            if (typeof(IIntegrationEventUpcaster).IsAssignableFrom(type))
+            {
+                // Upcasters of the publishing module's contracts (see IntegrationEventRegistry).
+                services.AddSingleton(typeof(IIntegrationEventUpcaster), type);
+            }
+
             foreach (var contract in type.GetInterfaces().Where(contract => contract.IsGenericType))
             {
                 var definition = contract.GetGenericTypeDefinition();
