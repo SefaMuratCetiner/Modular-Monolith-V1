@@ -130,7 +130,7 @@ services:
         limits: { cpus: "0.50", memory: 256M }
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.3.3
+    image: quay.io/keycloak/keycloak:26.8.0
     # DEVELOPMENT mode (start-dev: HTTP, in-memory H2, demo users). Production: deploy/production.
     # The issuer is always http://localhost:8080 (what browsers/CLIs see), while back-channel calls
     # from the API container (discovery, JWKS) use the internal host name "keycloak".
