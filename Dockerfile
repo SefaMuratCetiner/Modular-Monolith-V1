@@ -7,7 +7,7 @@
 #   The "-extra" flavour adds ICU and tzdata (culture-aware formatting and time zones).
 # - Both base images are pinned to exact versions; Dependabot (.github/dependabot.yml) proposes updates.
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0.302-noble AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0.402-noble AS build
 WORKDIR /src
 
 COPY NuGet.Config global.json Directory.Build.props Directory.Packages.props .editorconfig ./
@@ -26,7 +26,7 @@ RUN dotnet restore src/Host/ModularMonolith.Host/ModularMonolith.Host.csproj --l
 COPY src ./src
 RUN dotnet publish src/Host/ModularMonolith.Host/ModularMonolith.Host.csproj -c Release -o /app/publish --no-restore /p:UseAppHost=false
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0.10-noble-chiseled-extra AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.13-noble-chiseled-extra AS runtime
 WORKDIR /app
 # Files stay owned by root and read-only for the app user; the application writes nothing to disk
 # (Data Protection keys live in PostgreSQL), so any UID works (Kubernetes runAsUser, OpenShift).
